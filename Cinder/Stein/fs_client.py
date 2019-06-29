@@ -166,7 +166,7 @@ class RestCommon(object):
                   'pageNum': page_num, 'pageSize': page_size}
 
         result = self.call(url, 'POST', params)
-        if result.get('errorCode') == constants.VOLUME_NOT_EXIST:
+        if result.get('errorCode') in constants.VOLUME_NOT_EXIST:
             return None
         self._assert_rest_result(
             result, "Query all volume session error")
@@ -215,7 +215,7 @@ class RestCommon(object):
     def query_volume_by_name(self, vol_name):
         url = '/volume/queryByName?volName=' + vol_name
         result = self.call(url, 'GET')
-        if result.get('errorCode') == constants.VOLUME_NOT_EXIST:
+        if result.get('errorCode') in constants.VOLUME_NOT_EXIST:
             return None
         self._assert_rest_result(
             result, _("Query volume by name session error"))
@@ -224,7 +224,7 @@ class RestCommon(object):
     def query_volume_by_id(self, vol_id):
         url = '/volume/queryById?volId=' + vol_id
         result = self.call(url, 'GET')
-        if result.get('errorCode') == constants.VOLUME_NOT_EXIST:
+        if result.get('errorCode') in constants.VOLUME_NOT_EXIST:
             return None
         self._assert_rest_result(
             result, _("Query volume by ID session error"))
