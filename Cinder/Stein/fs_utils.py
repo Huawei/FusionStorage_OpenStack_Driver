@@ -13,7 +13,21 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import datetime
+import pytz
+import time
+
 from oslo_log import log as logging
+
+from cinder import context
+from cinder import exception
+from cinder.i18n import _
+from cinder import objects
+from cinder.volume.drivers.fusionstorage import constants
+from cinder.volume import qos_specs
+from cinder.volume import volume_types
+
+
 LOG = logging.getLogger(__name__)
 
 
@@ -80,3 +94,349 @@ def is_host_group_empty(client, host_group_name):
 def is_host_in_host_group(client, host_name, host_group_name):
     all_host = client.get_host_in_hostgroup(host_group_name)
     return host_name in all_host
+
+
+def get_volume_params(volume, client):
+    volume_type = _get_volume_type(volume)
+    return get_volume_type_params(volume_type, client)
+
+
+def _get_volume_type(volume):
+    if volume.volume_type:
+        return volume.volume_type
+    if volume.volume_type_id:
+        return volume_types.get_volume_type(None, volume.volume_type_id)
+
+
+def get_volume_type_params(volume_type, client):
+    vol_params = {}
+
+    if isinstance(volume_type, dict) and volume_type.get('qos_specs_id'):
+        vol_params['qos'] = _get_qos_specs(volume_type['qos_specs_id'], client)
+    elif isinstance(volume_type, objects.VolumeType
+                    ) and volume_type.qos_specs_id:
+        vol_params['qos'] = _get_qos_specs(volume_type.qos_specs_id, client)
+
+    LOG.info('volume opts %s.', vol_params)
+    return vol_params
+
+
+def _get_qos_specs(qos_specs_id, client):
+    ctxt = context.get_admin_context()
+    specs = qos_specs.get_qos_specs(ctxt, qos_specs_id)
+    if specs is None:
+        return {}
+
+    if specs.get('consumer') == 'front-end':
+        return {}
+
+    kvs = specs.get('specs', {})
+    LOG.info('The QoS specs is: %s.', kvs)
+
+    qos = dict()
+    for k, v in kvs.items():
+        if k not in constants.QOS_KEYS + constants.QOS_SCHEDULER_KEYS:
+            msg = _('QoS key %s is not valid.') % k
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        if k in constants.QOS_KEYS:
+            if int(v) <= 0:
+                msg = _('QoS value for %s must > 0.') % k
+                LOG.error(msg)
+                raise exception.InvalidInput(reason=msg)
+
+            qos[k] = int(v.encode("utf-8"))
+        elif k in constants.QOS_SCHEDULER_KEYS:
+            qos[k] = v.strip()
+
+    for item in constants.QOS_MUST_SET:
+        if qos.get(item) is None:
+            msg = _('maxIOPS and maxMBPS must be set for QoS: %s') % qos
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+    if qos.get(constants.QOS_SCHEDULER_KEYS[0]):
+        if client.get_fsm_version() >= constants.QOS_SUPPORT_SCHEDULE_VERSION:
+            qos = _check_and_convert_qos(qos, client)
+        else:
+            msg = _('FusionStorage Version is not suitable for QoS: %s') % qos
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+    return qos
+
+
+def _check_and_convert_qos(qos, client):
+    configed_none_default = 0
+    sys_loc_time = _get_sys_time(client)
+    sys_loc_time = time.strptime(datetime.datetime.now(sys_loc_time).strftime(
+        "%Y-%m-%d %H:%M:%S"), "%Y-%m-%d %H:%M:%S")
+
+    (qos, is_default_scheduler,
+     configed_week_scheduler) = _convert_schedule_type(qos)
+
+    qos, configed_none_default = _convert_start_date(
+        qos, sys_loc_time, configed_none_default)
+
+    (qos, configed_none_default,
+     is_date_decrease, is_date_crease) = _convert_start_time(
+        qos, client, sys_loc_time, configed_none_default)
+
+    qos, configed_none_default = _convert_duration_time(
+        qos, configed_none_default)
+
+    qos, configed_none_default = _convert_day_of_week(
+        qos, configed_none_default)
+
+    if is_default_scheduler and configed_none_default:
+        msg = (_("The default scheduler: %(type)s is not allowed to config "
+                 "other scheduler policy")
+               % {"type": qos[constants.QOS_SCHEDULER_KEYS[0]]})
+        LOG.error(msg)
+        raise exception.InvalidInput(msg)
+
+    if configed_week_scheduler and (
+            configed_none_default != len(constants.QOS_SCHEDULER_KEYS) - 1):
+        msg = (_("The week scheduler type %(type)s params number are "
+                 "incorrect.")
+               % {"type": qos[constants.QOS_SCHEDULER_KEYS[0]]})
+        LOG.error(msg)
+        raise exception.InvalidInput(msg)
+
+    if (not is_default_scheduler and not configed_week_scheduler and
+            configed_none_default != len(constants.QOS_SCHEDULER_KEYS) - 2):
+        msg = (_("The scheduler type %(type)s params number are incorrect.")
+               % {"type": qos[constants.QOS_SCHEDULER_KEYS[0]]})
+        LOG.error(msg)
+        raise exception.InvalidInput(msg)
+
+    if is_date_decrease:
+        config_date_sec = qos[constants.QOS_SCHEDULER_KEYS[1]]
+        qos[constants.QOS_SCHEDULER_KEYS[1]] = (config_date_sec -
+                                                constants.SECONDS_OF_DAY)
+
+    if is_date_crease:
+        config_date_sec = qos[constants.QOS_SCHEDULER_KEYS[1]]
+        qos[constants.QOS_SCHEDULER_KEYS[1]] = (config_date_sec +
+                                                constants.SECONDS_OF_DAY)
+
+    return qos
+
+
+def _get_sys_time(client):
+    time_zone = client.get_system_time_zone()
+    try:
+        sys_loc_time = pytz.timezone(time_zone)
+    except Exception as err:
+        LOG.warning("Time zone %(zone)s does not exist in the operating "
+                    "system, reason: %(err)s"
+                    % {"zone": time_zone, "err": err})
+        sys_loc_time = pytz.timezone(constants.TIMEZONE[time_zone])
+    return sys_loc_time
+
+
+def _deal_dst_time(client, dst_date_time, sys_dst_time):
+    LOG.info("Config time is %(config)s, current system time is %(cur)s."
+             % {"config": dst_date_time, "cur": sys_dst_time})
+    time_config = client.get_time_config()
+    use_dst = int(time_config.get("use_dst", 0))
+    # Config time is or not dst time
+    date_in_dst_time = False
+    # Current time is or not dst time
+    cur_date_in_dst_time = False
+    if use_dst:
+        dst_start_time = time_config["dst_begin_date"]
+        dst_end_time = time_config["dst_end_date"]
+        if dst_end_time >= dst_date_time >= dst_start_time:
+            date_in_dst_time = True
+        elif dst_end_time < dst_start_time and (
+                sys_dst_time > dst_end_time or sys_dst_time < dst_start_time):
+            date_in_dst_time = True
+        if dst_end_time >= sys_dst_time >= dst_start_time:
+            cur_date_in_dst_time = True
+        elif dst_end_time <= dst_start_time and (
+                sys_dst_time < dst_end_time or sys_dst_time > dst_start_time):
+                cur_date_in_dst_time = True
+
+    LOG.info("Config date in DST: %(config)s, current date in DST: %(cur)s."
+             % {"config": date_in_dst_time, "cur": cur_date_in_dst_time})
+    return date_in_dst_time, cur_date_in_dst_time
+
+
+def _get_qos_time_params(sys_sec, utc_sec, config_sec,
+                         cur_date_in_dst_time, date_in_dst_time):
+    LOG.info("System time_seconds is: %(sys)s, UTC time_seconds is: %(utc)s, "
+             "config time_seconds is: %(config)s"
+             % {"sys": sys_sec, "utc": utc_sec, "config": config_sec})
+    is_date_crease = False
+    is_date_decrease = False
+    green_zero_sec = sys_sec - utc_sec
+    if green_zero_sec > 0:
+        if cur_date_in_dst_time:
+            green_zero_sec -= constants.SECONDS_OF_HOUR
+        else:
+            if date_in_dst_time:
+                green_zero_sec += constants.SECONDS_OF_HOUR
+
+        if config_sec >= green_zero_sec:
+            qos_time_params = int(config_sec - green_zero_sec)
+        else:
+            qos_time_params = int(config_sec + (constants.SECONDS_OF_DAY
+                                                - green_zero_sec))
+            is_date_decrease = True
+    else:
+        green_zero_sec = abs(green_zero_sec)
+        if cur_date_in_dst_time:
+            green_zero_sec += constants.SECONDS_OF_HOUR
+        else:
+            if date_in_dst_time:
+                green_zero_sec -= constants.SECONDS_OF_HOUR
+
+        if config_sec + green_zero_sec < constants.SECONDS_OF_DAY:
+            qos_time_params = int(config_sec + green_zero_sec)
+        else:
+            qos_time_params = int(config_sec + green_zero_sec -
+                                  constants.SECONDS_OF_DAY)
+            is_date_crease = True
+    return qos_time_params, is_date_decrease, is_date_crease
+
+
+def _convert_schedule_type(qos):
+    is_default_scheduler = True
+    configed_week_scheduler = False
+    schedule_type = constants.QOS_SCHEDULER_KEYS[0]
+    if qos.get(schedule_type):
+        # Distinguish type
+        if qos[schedule_type] != constants.QOS_SCHEDULER_DEFAULT_TYPE:
+            is_default_scheduler = False
+        if qos[schedule_type] == constants.QOS_SCHEDULER_WEEK_TYPE:
+            configed_week_scheduler = True
+        qos[schedule_type] = int(qos[schedule_type])
+
+    return qos, is_default_scheduler, configed_week_scheduler
+
+
+def _convert_start_date(qos, sys_loc_time, configed_none_default):
+    start_date = constants.QOS_SCHEDULER_KEYS[1]
+    sys_date_time = time.strftime("%Y-%m-%d", sys_loc_time)
+    if qos.get(start_date):
+        # Convert the config date to timestamp
+        cur_date = time.mktime(time.strptime(sys_date_time, '%Y-%m-%d'))
+        try:
+            config_date = time.mktime(time.strptime(qos[start_date],
+                                                    '%Y-%m-%d'))
+        except Exception as err:
+            msg = (_("The start date %(date)s is illegal. Reason: %(err)s")
+                   % {"date": qos[start_date], "err": err})
+            LOG.error(msg)
+            raise exception.InvalidInput(msg)
+
+        if config_date < cur_date:
+            msg = (_("The start date %(date)s is earlier than current "
+                     "time") % {"date": qos[start_date]})
+            LOG.error(msg)
+            raise exception.InvalidInput(msg)
+        qos[start_date] = int(config_date)
+        configed_none_default += 1
+    return qos, configed_none_default
+
+
+def _convert_start_time(qos, client, sys_loc_time, configed_none_default):
+    start_date = constants.QOS_SCHEDULER_KEYS[1]
+    start_time = constants.QOS_SCHEDULER_KEYS[2]
+    is_date_crease = False
+    is_date_decrease = False
+    sys_dst_time = time.strftime("%m-%d %H:%M:%S", sys_loc_time)
+    if qos.get(start_time):
+        if qos.get(start_date) is None:
+            msg = (_("The start date %(date)s is not config.")
+                   % {"date": qos.get(start_date)})
+            LOG.error(msg)
+            raise exception.InvalidInput(msg)
+        # Convert the config time to green time
+        try:
+            config_time = time.strptime(qos[start_time], "%H:%M")
+        except Exception as err:
+            msg = (_("The start time %(time)s is illegal. Reason: %(err)s")
+                   % {"time": qos[start_time], "err": err})
+            LOG.error(msg)
+            raise exception.InvalidInput(msg)
+        config_sec = datetime.timedelta(
+            hours=config_time.tm_hour, minutes=config_time.tm_min).seconds
+
+        dst_date_time = time.strftime("%m-%d %H:%M:%S", time.localtime(
+            qos.get(start_date) + config_sec))
+        date_in_dst_time, cur_date_in_dst_time = _deal_dst_time(
+            client, dst_date_time, sys_dst_time)
+
+        sys_sec = time.mktime(sys_loc_time)
+        utc_time = time.strptime(datetime.datetime.now(pytz.timezone(
+            "UTC")).strftime("%Y-%m-%d %H:%M:%S"), "%Y-%m-%d %H:%M:%S")
+        utc_sec = time.mktime(utc_time)
+
+        (qos_time_params, is_date_decrease,
+         is_date_crease) = _get_qos_time_params(sys_sec, utc_sec, config_sec,
+                                                cur_date_in_dst_time,
+                                                date_in_dst_time)
+
+        qos[start_time] = qos_time_params
+        configed_none_default += 1
+    return qos, configed_none_default, is_date_decrease, is_date_crease
+
+
+def _convert_duration_time(qos, configed_none_default):
+    duration_time = constants.QOS_SCHEDULER_KEYS[3]
+    if qos.get(duration_time):
+        # Convert the config duration time to seconds
+        if qos[duration_time] == "24:00":
+            config_duration_sec = constants.SECONDS_OF_DAY
+        else:
+            try:
+                config_duration_time = time.strptime(
+                    qos[duration_time], "%H:%M")
+            except Exception as err:
+                msg = (_("The duration time %(time)s is illegal. "
+                         "Reason: %(err)s")
+                       % {"time": qos[duration_time], "err": err})
+                LOG.error(msg)
+                raise exception.InvalidInput(msg)
+
+            config_duration_sec = datetime.timedelta(
+                hours=config_duration_time.tm_hour,
+                minutes=config_duration_time.tm_min).seconds
+        qos[duration_time] = int(config_duration_sec)
+        configed_none_default += 1
+    return qos, configed_none_default
+
+
+def _convert_day_of_week(qos, configed_none_default):
+    day_of_week = constants.QOS_SCHEDULER_KEYS[4]
+    if qos.get(day_of_week):
+        # Convert the week days
+        config_days = 0
+        config_days_list = qos[day_of_week].split()
+        for config in config_days_list:
+            if config not in constants.WEEK_DAYS:
+                msg = (_("The week day %s is illegal.") % qos[day_of_week])
+                LOG.error(msg)
+                raise exception.InvalidInput(msg)
+
+        for index in range(len(constants.WEEK_DAYS)):
+            if constants.WEEK_DAYS[index] in config_days_list:
+                config_days += pow(2, index)
+        qos[day_of_week] = int(config_days)
+        configed_none_default += 1
+    return qos, configed_none_default
+
+
+def get_volume_specs(client, vol_name):
+    vol_info = {}
+    qos_info = {}
+    vol_qos = client.get_qos_by_vol_name(vol_name)
+    for key, value in vol_qos.get("qosSpecInfo", {}).items():
+        if (key in (constants.QOS_KEYS + constants.QOS_SCHEDULER_KEYS) and
+                int(value)):
+            qos_info[key] = int(value)
+    vol_info['qos'] = qos_info
+    return vol_info

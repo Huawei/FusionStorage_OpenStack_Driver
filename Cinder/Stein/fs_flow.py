@@ -20,7 +20,6 @@ from taskflow.patterns import linear_flow
 from taskflow import task
 from taskflow.types import failure
 
-from cinder import exception
 from cinder.volume.drivers.fusionstorage import constants
 from cinder.volume.drivers.fusionstorage import fs_utils
 
@@ -275,8 +274,8 @@ def get_iscsi_required_params(vol_name, connector, client=None):
             msg = ('Terminate_connection: multiple mapping of volume %(vol)s '
                    'found, no host specified, host_list: '
                    '%(host)s') % {'vol': vol_name, 'host': host_list}
-            LOG.error(msg)
-            raise exception.VolumeBackendAPIException(data=msg)
+            LOG.warning(msg)
+            return None, None, None, None, None
         elif len(host_list) == 1:
             host_name = host_list[0]['hostName']
             host_group_name = constants.HOST_GROUP_PREFIX + host_name

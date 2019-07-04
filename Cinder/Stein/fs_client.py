@@ -53,15 +53,18 @@ class RestCommon(object):
 
     def call(self, url, method, data=None,
              call_timeout=constants.DEFAULT_TIMEOUT,
-             get_version=False, filter_flag=False, json_flag=False):
+             get_version=False, get_system_time=False,
+             filter_flag=False, json_flag=False):
         kwargs = {'timeout': call_timeout}
         if data is not None:
             kwargs['data'] = json.dumps(data)
 
-        if not get_version:
-            call_url = self.address + constants.BASIC_URI + "v1.2" + url
-        else:
+        if get_system_time:
+            call_url = self.address + url
+        elif get_version:
             call_url = self.address + constants.BASIC_URI + url
+        else:
+            call_url = self.address + constants.BASIC_URI + "v1.2" + url
 
         func = getattr(self.session, method.lower())
 
@@ -472,3 +475,87 @@ class RestCommon(object):
         self._assert_rest_result(
             result, _("Get iscsi port info session error"))
         return result.get("nodeResultList", [])
+
+    def create_qos(self, qos_name, qos_params):
+        url = "/qos/create"
+        params = {"qosName": qos_name, "qosSpecInfo": qos_params}
+        result = self.call(url, "POST", params)
+        self._assert_rest_result(
+            result, _("Create QoS session error"))
+
+    def delete_qos(self, qos_name):
+        url = "/qos/delete"
+        params = {"qosNames": [qos_name]}
+        result = self.call(url, "POST", params)
+        self._assert_rest_result(
+            result, _("Delete QoS session error"))
+
+    def modify_qos(self, qos_name, qos_params):
+        url = "/qos/modify"
+        params = {"qosName": qos_name, "qosSpecInfo": qos_params}
+        result = self.call(url, "POST", params)
+        self._assert_rest_result(
+            result, _("Modify QoS session error"))
+
+    def associate_qos_with_volume(self, vol_name, qos_name):
+        url = "/qos/volume/associate"
+        params = {"keyNames": [vol_name], "qosName": qos_name}
+        result = self.call(url, "POST", params)
+        self._assert_rest_result(
+            result, _("Associate QoS with volume session error"))
+
+    def disassociate_qos_with_volume(self, vol_name, qos_name):
+        url = "/qos/volume/disassociate"
+        params = {"keyNames": [vol_name], "qosName": qos_name}
+        result = self.call(url, "POST", params)
+        self._assert_rest_result(
+            result, _("Disassociate QoS with volume session error"))
+
+    def get_qos_by_vol_name(self, vol_name):
+        url = "/volume/qos?volName=%s" % vol_name
+        result = self.call(url, "GET")
+        self._assert_rest_result(
+            result, _("Get QoS by volume name session error"))
+
+        return result
+
+    def get_qos_volume_info(self, pool_id, qos_name,
+                            batch_num=1, batch_size=5):
+        url = "/qos/volume/list?type=associated"
+        params = {"pageNum": batch_num,
+                  "pageSize": batch_size,
+                  "queryType": "volume",
+                  "qosName": qos_name,
+                  "poolId": pool_id}
+
+        result = self.call(url, "POST", params)
+        self._assert_rest_result(
+            result, _("Get QoS info session error"))
+        return result.get("volumes", [])
+
+    def get_fsm_version(self):
+        url = "/version"
+        result = self.call(url, "GET")
+        self._assert_rest_result(
+            result, _("Get FSM version session error."))
+        return result.get("version")
+
+    def get_system_time_zone(self):
+        url = "/time/querytimezone"
+        result = self.call(url, "GET")
+        self._assert_rest_result(
+            result, _("Get system time zone session error."))
+
+        return result.get("timeZone")
+
+    def get_time_config(self):
+        url = "/api/v2/common/time_config"
+        result = self.call(url, "GET", get_system_time=True)
+        if result.get('result', {}).get("code") != 0:
+            msg = (_('Get system time config session error. result: %(res)s.')
+                   % {'res': result})
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+        if result.get("data"):
+            return result.get("data")[0]
+        return {}

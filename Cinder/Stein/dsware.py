@@ -27,6 +27,8 @@ from cinder.volume import driver
 from cinder.volume.drivers.fusionstorage import fs_client
 from cinder.volume.drivers.fusionstorage import fs_conf
 from cinder.volume.drivers.fusionstorage import fs_flow
+from cinder.volume.drivers.fusionstorage import fs_qos
+from cinder.volume.drivers.fusionstorage import fs_utils
 from cinder.volume.drivers.san import san
 from cinder.volume import utils as volume_utils
 
@@ -129,6 +131,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         self.configuration.append_config_values(san.san_opts)
         self.conf = fs_conf.FusionStorageConf(self.configuration, self.host)
         self.client = None
+        self.fs_qos = None
 
     @staticmethod
     def get_driver_options():
@@ -144,6 +147,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
             fs_address=url_str, fs_user=url_user,
             fs_password=url_password)
         self.client.login()
+        self.fs_qos = fs_qos.FusionStorageQoS(self.client)
 
     def check_for_setup_error(self):
         all_pools = self.client.query_pool_info()
@@ -162,7 +166,6 @@ class DSWAREBaseDriver(driver.VolumeDriver):
             'volume_backend_name') or self.__class__.__name__
         data = {"volume_backend_name": backend_name,
                 "driver_version": "2.0.9",
-                "QoS_support": False,
                 "thin_provisioning_support": False,
                 "pools": [],
                 "vendor_name": "Huawei"
@@ -193,6 +196,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
             "pool_name": pool_info['poolName'],
             "total_capacity_gb": capacity['total_capacity_gb'],
             "free_capacity_gb": capacity['free_capacity_gb'],
+            "QoS_support": True,
         })
         return status
 
@@ -234,6 +238,15 @@ class DSWAREBaseDriver(driver.VolumeDriver):
             vol_name = volume.name
         return vol_name
 
+    def _add_qos_to_volume(self, volume, vol_name):
+        opts = fs_utils.get_volume_params(volume, self.client)
+        if opts.get("qos"):
+            try:
+                self.fs_qos.add(opts["qos"], vol_name)
+            except Exception:
+                self.client.delete_volume(vol_name=vol_name)
+                raise
+
     def create_volume(self, volume):
         pool_id = self._get_pool_id(volume)
         vol_name = volume.name
@@ -242,9 +255,12 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         self.client.create_volume(
             pool_id=pool_id, vol_name=vol_name, vol_size=vol_size)
 
+        self._add_qos_to_volume(volume, vol_name)
+
     def delete_volume(self, volume):
         vol_name = self._get_vol_name(volume)
         if self._check_volume_exist(volume):
+            self.fs_qos.remove(vol_name)
             self.client.delete_volume(vol_name=vol_name)
 
     def extend_volume(self, volume, new_size):
@@ -291,6 +307,8 @@ class DSWAREBaseDriver(driver.VolumeDriver):
                 snapshot_name=snapshot_name, vol_name=vol_name,
                 vol_size=vol_size)
 
+            self._add_qos_to_volume(volume, vol_name)
+
     def create_cloned_volume(self, volume, src_volume):
         vol_name = self._get_vol_name(volume)
         src_vol_name = self._get_vol_name(src_volume)
@@ -306,6 +324,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
             self.client.create_volume_from_volume(
                 vol_name=vol_name, vol_size=vol_size,
                 src_vol_name=src_vol_name)
+            self._add_qos_to_volume(volume, vol_name)
 
             try:
                 vol_info = self.client.query_volume_by_name(vol_name)
@@ -355,10 +374,45 @@ class DSWAREBaseDriver(driver.VolumeDriver):
                 existing_ref=existing_ref, reason=msg)
         return vol_info
 
+    def _check_need_changes_for_manage(self, volume, vol_name):
+        old_qos = {}
+        new_qos = {}
+        new_opts = fs_utils.get_volume_params(volume, self.client)
+        old_opts = fs_utils.get_volume_specs(self.client, vol_name)
+
+        # Not support from existence to absence or change
+        if old_opts.get("qos"):
+            if old_opts.get("qos") != new_opts.get("qos"):
+                msg = (_("The current volume qos is: %(old_qos)s, the manage "
+                         "volume qos is: %(new_qos)s")
+                       % {"old_qos": old_opts.get("qos"),
+                          "new_qos": new_opts.get("qos")})
+                self._raise_exception(msg)
+        elif new_opts.get("qos"):
+            new_qos["qos"] = new_opts.get("qos")
+            old_qos["qos"] = {}
+
+        change_opts = {"old_opts": old_qos,
+                       "new_opts": new_qos}
+
+        return change_opts
+
+    def _change_lun(self, vol_name, new_opts, old_opts):
+        def _change_qos():
+            if old_opts.get("qos") and not new_opts.get("qos"):
+                self.fs_qos.remove(vol_name)
+            if not old_opts.get("qos") and new_opts.get("qos"):
+                self.fs_qos.add(new_opts["qos"], vol_name)
+            if old_opts.get("qos") and new_opts.get("qos"):
+                self.fs_qos.update(new_opts["qos"], vol_name)
+
+        _change_qos()
+
     def manage_existing(self, volume, existing_ref):
         pool = self._get_pool_id(volume)
         vol_info = self._get_volume_info(pool, existing_ref)
         vol_pool_id = vol_info.get('poolId')
+        vol_name = vol_info.get('volName')
 
         if pool != vol_pool_id:
             msg = (_("The specified LUN does not belong to the given "
@@ -366,7 +420,11 @@ class DSWAREBaseDriver(driver.VolumeDriver):
             raise exception.ManageExistingInvalidReference(
                 existing_ref=existing_ref, reason=msg)
 
-        provider_location = {"name": vol_info.get('volName')}
+        change_opts = self._check_need_changes_for_manage(volume, vol_name)
+        self._change_lun(vol_name, change_opts.get("new_opts"),
+                         change_opts.get("old_opts"))
+
+        provider_location = {"name": vol_name}
         return {'provider_location': json.dumps(provider_location)}
 
     def manage_existing_get_size(self, volume, existing_ref):
@@ -433,6 +491,42 @@ class DSWAREBaseDriver(driver.VolumeDriver):
 
     def unmanage_snapshot(self, snapshot):
         return
+
+    def _check_need_changes_for_retype(self, volume, new_type, host, vol_name):
+        before_change = {}
+        after_change = {}
+        if volume.host != host["host"]:
+            msg = (_("Do not support retype between different host. Volume's "
+                     "host: %(vol_host)s, host's host: %(host)s")
+                   % {"vol_host": volume.host, "host": host['host']})
+            LOG.error(msg)
+            raise exception.InvalidInput(msg)
+
+        old_opts = fs_utils.get_volume_specs(self.client, vol_name)
+        new_opts = fs_utils.get_volume_type_params(new_type, self.client)
+        if old_opts.get('qos') != new_opts.get('qos'):
+            before_change["qos"] = old_opts.get("qos")
+            after_change["qos"] = new_opts.get("qos")
+
+        change_opts = {"old_opts": before_change,
+                       "new_opts": after_change}
+        return change_opts
+
+    def retype(self, context, volume, new_type, diff, host):
+        LOG.info("Retype volume: %(vol)s, new_type: %(new_type)s, "
+                 "diff: %(diff)s, host: %(host)s",
+                 {"vol": volume.id,
+                  "new_type": new_type,
+                  "diff": diff,
+                  "host": host})
+
+        vol_name = self._get_vol_name(volume)
+        change_opts = self._check_need_changes_for_retype(
+            volume, new_type, host, vol_name)
+        self._change_lun(vol_name, change_opts.get("new_opts"),
+                         change_opts.get("old_opts"))
+
+        return True, None
 
     def create_export(self, context, volume, connector):
         pass
