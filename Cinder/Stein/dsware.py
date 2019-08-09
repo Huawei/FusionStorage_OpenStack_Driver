@@ -539,6 +539,10 @@ class DSWAREBaseDriver(driver.VolumeDriver):
 
 
 class DSWAREDriver(DSWAREBaseDriver):
+    def get_volume_stats(self, refresh=False):
+        stats = DSWAREBaseDriver.get_volume_stats(self, refresh=False)
+        stats['storage_protocol'] = 'SCSI'
+        return stats
 
     def _get_manager_ip(self, context):
         if self.configuration.manager_ips.get(context['host']):
@@ -596,6 +600,11 @@ class DSWAREDriver(DSWAREBaseDriver):
 
 
 class DSWAREISCSIDriver(DSWAREBaseDriver):
+    def get_volume_stats(self, refresh=False):
+        stats = DSWAREBaseDriver.get_volume_stats(self, refresh=False)
+        stats['storage_protocol'] = 'iSCSI'
+        return stats
+
     @coordination.synchronized('huawei-mapping-{connector[host]}')
     def initialize_connection(self, volume, connector):
         LOG.info("Start to initialize iscsi connection, volume: %(vol)s, "

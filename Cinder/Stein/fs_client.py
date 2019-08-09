@@ -139,7 +139,8 @@ class RestCommon(object):
         url = '/sec/keepAlive'
         result = self.call(url, 'POST', filter_flag=True)
 
-        if result.get('result') == constants.ERROR_UNAUTHORIZED:
+        if (result.get('result') == constants.ERROR_UNAUTHORIZED or
+                result.get("errorCode") == constants.ERROR_USER_OFFLINE):
             try:
                 self.login()
             except Exception:
