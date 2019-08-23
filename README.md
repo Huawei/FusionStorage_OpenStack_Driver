@@ -1,4 +1,5 @@
 # FusionStorage_OpenStack_Driver
-Cinder and Manila drivers for Huawei FusionStorage.
+Cinder driver for Huawei FusionStorage.
 
-Support from the Rocky.
+For OpenStack Queens, Rocky, Stein;
+For FusionStorage Block 6.3 and 8.0.
