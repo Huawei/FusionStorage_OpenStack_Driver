@@ -307,8 +307,6 @@ class DSWAREBaseDriver(driver.VolumeDriver):
                 snapshot_name=snapshot_name, vol_name=vol_name,
                 vol_size=vol_size)
 
-            self._add_qos_to_volume(volume, vol_name)
-
             try:
                 vol_info = self.client.query_volume_by_name(vol_name)
                 expect_size = vol_info.get('volSize')
@@ -316,6 +314,8 @@ class DSWAREBaseDriver(driver.VolumeDriver):
                     self.client.expand_volume(vol_name, vol_size)
             except Exception:
                 raise
+
+            self._add_qos_to_volume(volume, vol_name)
 
     def create_cloned_volume(self, volume, src_volume):
         vol_name = self._get_vol_name(volume)
