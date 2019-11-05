@@ -121,6 +121,17 @@ def get_volume_type_params(volume_type, client):
     return vol_params
 
 
+def _get_trigger_qos(qos, client):
+    if qos.get(constants.QOS_SCHEDULER_KEYS[0]):
+        if client.get_fsm_version() >= constants.QOS_SUPPORT_SCHEDULE_VERSION:
+            qos = _check_and_convert_qos(qos, client)
+        else:
+            msg = _('FusionStorage Version is not suitable for QoS: %s') % qos
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+    return qos
+
+
 def _get_qos_specs(qos_specs_id, client):
     ctxt = context.get_admin_context()
     specs = qos_specs.get_qos_specs(ctxt, qos_specs_id)
@@ -156,13 +167,7 @@ def _get_qos_specs(qos_specs_id, client):
             LOG.error(msg)
             raise exception.InvalidInput(reason=msg)
 
-    if qos.get(constants.QOS_SCHEDULER_KEYS[0]):
-        if client.get_fsm_version() >= constants.QOS_SUPPORT_SCHEDULE_VERSION:
-            qos = _check_and_convert_qos(qos, client)
-        else:
-            msg = _('FusionStorage Version is not suitable for QoS: %s') % qos
-            LOG.error(msg)
-            raise exception.InvalidInput(reason=msg)
+    qos = _get_trigger_qos(qos, client)
 
     return qos
 
@@ -236,69 +241,54 @@ def _get_sys_time(client):
     return sys_loc_time
 
 
-def _deal_dst_time(client, dst_date_time, sys_dst_time):
-    LOG.info("Config time is %(config)s, current system time is %(cur)s."
-             % {"config": dst_date_time, "cur": sys_dst_time})
-    time_config = client.get_time_config()
+def _deal_dst_time(time_config, cur_time):
+    LOG.info("Current system time is %(cur)s.", {"cur": cur_time})
     use_dst = int(time_config.get("use_dst", 0))
-    # Config time is or not dst time
-    date_in_dst_time = False
     # Current time is or not dst time
-    cur_date_in_dst_time = False
+    cur_is_in_dst = False
     if use_dst:
-        dst_start_time = time_config["dst_begin_date"]
-        dst_end_time = time_config["dst_end_date"]
-        if dst_end_time >= dst_date_time >= dst_start_time:
-            date_in_dst_time = True
-        elif dst_end_time < dst_start_time and (
-                sys_dst_time > dst_end_time or sys_dst_time < dst_start_time):
-            date_in_dst_time = True
-        if dst_end_time >= sys_dst_time >= dst_start_time:
-            cur_date_in_dst_time = True
-        elif dst_end_time <= dst_start_time and (
-                sys_dst_time < dst_end_time or sys_dst_time > dst_start_time):
-                cur_date_in_dst_time = True
+        start_time = time_config["dst_begin_date"]
+        end_time = time_config["dst_end_date"]
+        if (end_time >= cur_time >= start_time or
+                cur_time <= end_time < start_time or
+                end_time < start_time <= cur_time):
+            cur_is_in_dst = True
 
-    LOG.info("Config date in DST: %(config)s, current date in DST: %(cur)s."
-             % {"config": date_in_dst_time, "cur": cur_date_in_dst_time})
-    return date_in_dst_time, cur_date_in_dst_time
+    LOG.info("Current date in DST: %(cur)s.", {"cur": cur_is_in_dst})
+    return cur_is_in_dst
 
 
-def _get_qos_time_params(sys_sec, utc_sec, config_sec,
-                         cur_date_in_dst_time, date_in_dst_time):
-    LOG.info("System time_seconds is: %(sys)s, UTC time_seconds is: %(utc)s, "
-             "config time_seconds is: %(config)s"
-             % {"sys": sys_sec, "utc": utc_sec, "config": config_sec})
+def _get_qos_time_params(zone_flag, time_zone, config_sec,
+                         cur_date_in_dst_time):
+    LOG.info("time_zone is: %(time_zone)s, zone flag is: %(zone)s "
+             "config time_seconds is: %(config)s",
+             {"time_zone": time_zone, "zone": zone_flag,
+              "config": config_sec})
     is_date_crease = False
     is_date_decrease = False
-    green_zero_sec = sys_sec - utc_sec
-    if green_zero_sec > 0:
+    if zone_flag:
         if cur_date_in_dst_time:
-            green_zero_sec -= constants.SECONDS_OF_HOUR
-        else:
-            if date_in_dst_time:
-                green_zero_sec += constants.SECONDS_OF_HOUR
+            time_zone += constants.SECONDS_OF_HOUR
 
-        if config_sec >= green_zero_sec:
-            qos_time_params = int(config_sec - green_zero_sec)
+        if config_sec >= time_zone:
+            qos_time_params = int(config_sec - time_zone)
         else:
             qos_time_params = int(config_sec + (constants.SECONDS_OF_DAY
-                                                - green_zero_sec))
+                                                - time_zone))
             is_date_decrease = True
     else:
-        green_zero_sec = abs(green_zero_sec)
         if cur_date_in_dst_time:
-            green_zero_sec += constants.SECONDS_OF_HOUR
+            time_zone -= constants.SECONDS_OF_HOUR
+        if config_sec + time_zone < constants.SECONDS_OF_DAY:
+            qos_time_params = int(config_sec + time_zone)
         else:
-            if date_in_dst_time:
-                green_zero_sec -= constants.SECONDS_OF_HOUR
-
-        if config_sec + green_zero_sec < constants.SECONDS_OF_DAY:
-            qos_time_params = int(config_sec + green_zero_sec)
-        else:
-            qos_time_params = int(config_sec + green_zero_sec -
+            qos_time_params = int(config_sec + time_zone -
                                   constants.SECONDS_OF_DAY)
             is_date_crease = True
+    LOG.info("qos time is: %(time)s, is_date_decrease is %(decrease)s, "
+             "is_date_crease is %(crease)s" % {"time": qos_time_params,
+                                               "decrease": is_date_decrease,
+                                               "crease": is_date_crease})
     return qos_time_params, is_date_decrease, is_date_crease
 
 
@@ -317,15 +307,32 @@ def _convert_schedule_type(qos):
     return qos, is_default_scheduler, configed_week_scheduler
 
 
+def _get_diff_time(time_config):
+    time_zone = time_config.get("time_zone")
+    if not time_zone:
+        msg = _("The time zone info %s is invalid.") % time_zone
+        LOG.info(msg)
+        raise exception.InvalidInput(msg)
+
+    zone_flag, time_zone = ((False, time_zone.split("-")[1])
+                            if "-" in time_zone
+                            else (True, time_zone.split("+")[1]))
+    time_zone = time.strptime(time_zone, '%H:%M')
+    diff_time = datetime.timedelta(hours=time_zone.tm_hour,
+                                   minutes=time_zone.tm_min).seconds
+    return zone_flag, diff_time
+
+
 def _convert_start_date(qos, sys_loc_time, configed_none_default):
     start_date = constants.QOS_SCHEDULER_KEYS[1]
     sys_date_time = time.strftime("%Y-%m-%d", sys_loc_time)
     if qos.get(start_date):
         # Convert the config date to timestamp
-        cur_date = time.mktime(time.strptime(sys_date_time, '%Y-%m-%d'))
+        cur_date = time.mktime(time.strptime(
+            sys_date_time, '%Y-%m-%d')) - time.timezone
         try:
-            config_date = time.mktime(time.strptime(qos[start_date],
-                                                    '%Y-%m-%d'))
+            config_date = time.mktime(time.strptime(
+                qos[start_date], '%Y-%m-%d')) - time.timezone
         except Exception as err:
             msg = (_("The start date %(date)s is illegal. Reason: %(err)s")
                    % {"date": qos[start_date], "err": err})
@@ -365,20 +372,18 @@ def _convert_start_time(qos, client, sys_loc_time, configed_none_default):
         config_sec = datetime.timedelta(
             hours=config_time.tm_hour, minutes=config_time.tm_min).seconds
 
-        dst_date_time = time.strftime("%m-%d %H:%M:%S", time.localtime(
-            qos.get(start_date) + config_sec))
-        date_in_dst_time, cur_date_in_dst_time = _deal_dst_time(
-            client, dst_date_time, sys_dst_time)
+        time_config = client.get_time_config()
 
-        sys_sec = time.mktime(sys_loc_time)
-        utc_time = time.strptime(datetime.datetime.now(pytz.timezone(
-            "UTC")).strftime("%Y-%m-%d %H:%M:%S"), "%Y-%m-%d %H:%M:%S")
-        utc_sec = time.mktime(utc_time)
+        cur_date_in_dst_time = _deal_dst_time(
+            time_config, sys_dst_time)
+
+        LOG.info("System time is: %s", sys_loc_time)
+        zone_flag, time_zone = _get_diff_time(time_config)
 
         (qos_time_params, is_date_decrease,
-         is_date_crease) = _get_qos_time_params(sys_sec, utc_sec, config_sec,
-                                                cur_date_in_dst_time,
-                                                date_in_dst_time)
+         is_date_crease) = _get_qos_time_params(
+            zone_flag, time_zone, config_sec,
+            cur_date_in_dst_time)
 
         qos[start_time] = qos_time_params
         configed_none_default += 1

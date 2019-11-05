@@ -135,10 +135,7 @@ def _get_trigger_qos(qos, client):
 def _get_qos_specs(qos_specs_id, client):
     ctxt = context.get_admin_context()
     specs = qos_specs.get_qos_specs(ctxt, qos_specs_id)
-    if specs is None:
-        return {}
-
-    if specs.get('consumer') == 'front-end':
+    if specs is None or specs.get('consumer') == 'front-end':
         return {}
 
     kvs = specs.get('specs', {})
@@ -241,8 +238,9 @@ def _get_sys_time(client):
     return sys_loc_time
 
 
-def _deal_dst_time(time_config, cur_time):
-    LOG.info("Current system time is %(cur)s.", {"cur": cur_time})
+def _deal_dst_time(time_config, config_time, cur_time):
+    LOG.info("Config time is %(config)s, current system time is %(cur)s."
+             % {"config": config_time, "cur": cur_time})
     use_dst = int(time_config.get("use_dst", 0))
     # Current time is or not dst time
     cur_is_in_dst = False
@@ -254,16 +252,17 @@ def _deal_dst_time(time_config, cur_time):
                 end_time < start_time <= cur_time):
             cur_is_in_dst = True
 
-    LOG.info("Current date in DST: %(cur)s.", {"cur": cur_is_in_dst})
+    LOG.info("Current date in DST: %(cur)s."
+             % {"cur": cur_is_in_dst})
     return cur_is_in_dst
 
 
 def _get_qos_time_params(zone_flag, time_zone, config_sec,
                          cur_date_in_dst_time):
     LOG.info("time_zone is: %(time_zone)s, zone flag is: %(zone)s "
-             "config time_seconds is: %(config)s",
-             {"time_zone": time_zone, "zone": zone_flag,
-              "config": config_sec})
+             "config time_seconds is: %(config)s"
+             % {"time_zone": time_zone, "zone": zone_flag,
+                "config": config_sec})
     is_date_crease = False
     is_date_decrease = False
     if zone_flag:
@@ -308,12 +307,7 @@ def _convert_schedule_type(qos):
 
 
 def _get_diff_time(time_config):
-    time_zone = time_config.get("time_zone")
-    if not time_zone:
-        msg = _("The time zone info %s is invalid.") % time_zone
-        LOG.info(msg)
-        raise exception.InvalidInput(msg)
-
+    time_zone = time_config.get("time_zone", "")
     zone_flag, time_zone = ((False, time_zone.split("-")[1])
                             if "-" in time_zone
                             else (True, time_zone.split("+")[1]))
@@ -324,6 +318,7 @@ def _get_diff_time(time_config):
 
 
 def _convert_start_date(qos, sys_loc_time, configed_none_default):
+    reload(time)
     start_date = constants.QOS_SCHEDULER_KEYS[1]
     sys_date_time = time.strftime("%Y-%m-%d", sys_loc_time)
     if qos.get(start_date):
@@ -374,8 +369,10 @@ def _convert_start_time(qos, client, sys_loc_time, configed_none_default):
 
         time_config = client.get_time_config()
 
+        dst_date_time = time.strftime("%m-%d %H:%M:%S", time.localtime(
+            qos.get(start_date) + time.timezone + config_sec))
         cur_date_in_dst_time = _deal_dst_time(
-            time_config, sys_dst_time)
+            time_config, dst_date_time, sys_dst_time)
 
         LOG.info("System time is: %s", sys_loc_time)
         zone_flag, time_zone = _get_diff_time(time_config)
