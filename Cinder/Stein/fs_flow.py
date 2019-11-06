@@ -13,7 +13,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import ipaddress
 from oslo_log import log as logging
+import six
 
 import taskflow.engines
 from taskflow.patterns import linear_flow
@@ -241,6 +243,11 @@ class GetISCSIProperties(task.Task):
         for ip in self.configuration.target_ips:
             target_ip, target_iqn = fs_utils.get_target_portal(
                 self.client, ip)
+            ip_addr = ipaddress.ip_address(six.text_type(ip))
+            if ip_addr.version == 6:
+                split_target_ip = target_ip.split(":")
+                target_ip = '[' + ":".join(split_target_ip[:-1]) + "]" + ":" + \
+                            split_target_ip[-1]
             target_ips.append(target_ip)
             target_iqns.append(target_iqn)
             if not multipath:
