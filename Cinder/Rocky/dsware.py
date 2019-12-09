@@ -197,7 +197,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
             "total_capacity_gb": capacity['total_capacity_gb'],
             "free_capacity_gb": capacity['free_capacity_gb'],
             "QoS_support": True,
-            "multiattach": True,
+            'multiattach': True,
         })
         return status
 
@@ -289,6 +289,16 @@ class DSWAREBaseDriver(driver.VolumeDriver):
             snapshot_name = snapshot.name
         return snapshot_name
 
+    def _expand_volume_when_create(self, vol_name, vol_size):
+        try:
+            vol_info = self.client.query_volume_by_name(vol_name)
+            current_size = vol_info.get('volSize')
+            if current_size < vol_size:
+                self.client.expand_volume(vol_name, vol_size)
+        except Exception:
+            self.client.delete_volume(vol_name=vol_name)
+            raise
+
     def create_volume_from_snapshot(self, volume, snapshot):
         vol_name = self._get_vol_name(volume)
         snapshot_name = self._get_snapshot_name(snapshot)
@@ -307,16 +317,8 @@ class DSWAREBaseDriver(driver.VolumeDriver):
             self.client.create_volume_from_snapshot(
                 snapshot_name=snapshot_name, vol_name=vol_name,
                 vol_size=vol_size)
-
-            try:
-                vol_info = self.client.query_volume_by_name(vol_name)
-                expect_size = vol_info.get('volSize')
-                if expect_size < vol_size:
-                    self.client.expand_volume(vol_name, vol_size)
-            except Exception:
-                raise
-
             self._add_qos_to_volume(volume, vol_name)
+            self._expand_volume_when_create(vol_name, vol_size)
 
     def create_cloned_volume(self, volume, src_volume):
         vol_name = self._get_vol_name(volume)
@@ -334,14 +336,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
                 vol_name=vol_name, vol_size=vol_size,
                 src_vol_name=src_vol_name)
             self._add_qos_to_volume(volume, vol_name)
-
-            try:
-                vol_info = self.client.query_volume_by_name(vol_name)
-                expect_size = vol_info.get('volSize')
-                if expect_size < vol_size:
-                    self.client.expand_volume(vol_name, vol_size)
-            except Exception:
-                raise
+            self._expand_volume_when_create(vol_name, vol_size)
 
     def create_snapshot(self, snapshot):
         snapshot_name = self._get_snapshot_name(snapshot)
@@ -356,6 +351,17 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         if self._check_snapshot_exist(snapshot.volume, snapshot):
             self.client.delete_snapshot(snapshot_name=snapshot_name)
 
+    def _get_vol_info(self, pool_id, vol_name, vol_id):
+        if vol_name:
+            return self.client.query_volume_by_name(vol_name)
+
+        elif vol_id:
+            try:
+                return self.client.query_volume_by_id(vol_id)
+            except Exception:
+                LOG.warning("Query volume info by id failed!")
+                return self.client.get_volume_by_id(pool_id, vol_id)
+
     def _get_volume_info(self, pool_id, existing_ref):
         vol_name = existing_ref.get('source-name')
         vol_id = existing_ref.get('source-id')
@@ -365,16 +371,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
             raise exception.ManageExistingInvalidReference(
                 existing_ref=existing_ref, reason=msg)
 
-        vol_info = None
-        if vol_name:
-            vol_info = self.client.query_volume_by_name(vol_name)
-
-        if vol_id:
-            try:
-                vol_info = self.client.query_volume_by_id(vol_id)
-            except Exception:
-                LOG.warning("Query volume info by id failed!")
-                vol_info = self.client.get_volume_by_id(pool_id, vol_id)
+        vol_info = self._get_vol_info(pool_id, vol_name, vol_id)
 
         if not vol_info:
             msg = _("Can't find volume on the array, please check the "
@@ -406,14 +403,23 @@ class DSWAREBaseDriver(driver.VolumeDriver):
 
         return change_opts
 
+    def _change_qos_remove(self, vol_name, new_opts, old_opts):
+        if old_opts.get("qos") and not new_opts.get("qos"):
+            self.fs_qos.remove(vol_name)
+
+    def _change_qos_add(self, vol_name, new_opts, old_opts):
+        if not old_opts.get("qos") and new_opts.get("qos"):
+            self.fs_qos.add(new_opts["qos"], vol_name)
+
+    def _change_qos_update(self, vol_name, new_opts, old_opts):
+        if old_opts.get("qos") and new_opts.get("qos"):
+            self.fs_qos.update(new_opts["qos"], vol_name)
+
     def _change_lun(self, vol_name, new_opts, old_opts):
         def _change_qos():
-            if old_opts.get("qos") and not new_opts.get("qos"):
-                self.fs_qos.remove(vol_name)
-            if not old_opts.get("qos") and new_opts.get("qos"):
-                self.fs_qos.add(new_opts["qos"], vol_name)
-            if old_opts.get("qos") and new_opts.get("qos"):
-                self.fs_qos.update(new_opts["qos"], vol_name)
+            self._change_qos_remove(vol_name, new_opts, old_opts)
+            self._change_qos_add(vol_name, new_opts, old_opts)
+            self._change_qos_update(vol_name, new_opts, old_opts)
 
         _change_qos()
 
@@ -604,15 +610,16 @@ class DSWAREDriver(DSWAREBaseDriver):
     def terminate_connection(self, volume, connector, **kwargs):
         attachments = volume.volume_attachment
         if volume.multiattach and len(attachments) > 1 and sum(
-                1 for a in attachments if a.connector == connector):
-            LOG.info("Volume is multi-attach and attached to the same host "
-                     "multiple times")
+                1 for a in attachments if a.connector == connector) > 1:
+            LOG.info("Volume is multi-attach and attached to the same host"
+                     " multiple times")
             return
 
         if self._check_volume_exist(volume):
             manager_ip = self._get_manager_ip(connector)
             vol_name = self._get_vol_name(volume)
             self.client.detach_volume(vol_name, manager_ip)
+        LOG.info("Terminate iscsi connection successful.")
 
 
 class DSWAREISCSIDriver(DSWAREBaseDriver):
@@ -645,12 +652,11 @@ class DSWAREISCSIDriver(DSWAREBaseDriver):
         def _terminate_connection_locked(host):
             LOG.info("Start to terminate iscsi connection, volume: %(vol)s, "
                      "connector: %(con)s", {"vol": volume, "con": connector})
-
             attachments = volume.volume_attachment
             if volume.multiattach and len(attachments) > 1 and sum(
-                    1 for a in attachments if a.connector == connector):
-                LOG.info("Volume is multi-attach and attached to the same host "
-                         "multiple times")
+                    1 for a in attachments if a.connector == connector) > 1:
+                LOG.info("Volume is multi-attach and attached to the same host"
+                         " multiple times")
                 return
 
             if not self._check_volume_exist(volume):

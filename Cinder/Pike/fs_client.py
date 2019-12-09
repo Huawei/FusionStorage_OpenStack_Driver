@@ -51,21 +51,42 @@ class RestCommon(object):
         })
         self.session.verify = False
 
+    def _construct_url(self, url, get_version, get_system_time):
+        if get_system_time:
+            return self.address + url
+        elif get_version:
+            return self.address + constants.BASIC_URI + url
+        else:
+            return self.address + constants.BASIC_URI + "v1.2" + url
+
+    @staticmethod
+    def _deal_call_result(result, filter_flag, json_flag, req_dict):
+        if not filter_flag:
+            LOG.info('''
+            Request URL: %(url)s,
+            Call Method: %(method)s,
+            Request Data: %(data)s,
+            Response Data: %(res)s,
+            Result Data: %(res_json)s''', {'url': req_dict.get("url"),
+                                           'method': req_dict.get("method"),
+                                           'data': req_dict.get("data"),
+                                           'res': result,
+                                           'res_json': result.json()})
+
+        return result.json() if json_flag else result
+
     def call(self, url, method, data=None,
-             call_timeout=constants.DEFAULT_TIMEOUT,
-             get_version=False, get_system_time=False,
-             filter_flag=False, json_flag=False):
+             call_timeout=constants.DEFAULT_TIMEOUT, **input_kwargs):
+        filter_flag = input_kwargs.get("filter_flag")
+        json_flag = input_kwargs.get("json_flag", True)
+        get_version = input_kwargs.get("get_version")
+        get_system_time = input_kwargs.get("get_system_time")
+
         kwargs = {'timeout': call_timeout}
         if data is not None:
             kwargs['data'] = json.dumps(data)
 
-        if get_system_time:
-            call_url = self.address + url
-        elif get_version:
-            call_url = self.address + constants.BASIC_URI + url
-        else:
-            call_url = self.address + constants.BASIC_URI + "v1.2" + url
-
+        call_url = self._construct_url(url, get_version, get_system_time)
         func = getattr(self.session, method.lower())
 
         try:
@@ -83,20 +104,8 @@ class RestCommon(object):
             return {"error": {"code": exc.response.status_code,
                               "description": six.text_type(exc)}}
 
-        if not filter_flag:
-            LOG.info('''
-            Request URL: %(url)s,
-            Call Method: %(method)s,
-            Request Data: %(data)s,
-            Response Data: %(res)s,
-            Result Data: %(res_json)s''', {'url': call_url, 'method': method,
-                                           'data': data, 'res': result,
-                                           'res_json': result.json()})
-
-        if json_flag:
-            return result
-        else:
-            return result.json()
+        req_dict = {"url": call_url, "method": method, "data": data}
+        return self._deal_call_result(result, filter_flag, json_flag, req_dict)
 
     def _assert_rest_result(self, result, err_str):
         if result.get('result') != 0:
@@ -121,7 +130,7 @@ class RestCommon(object):
         data = {"userName": self.user, "password": self.password}
         result = self.call(url, 'POST', data=data,
                            call_timeout=constants.LOGIN_SOCKET_TIMEOUT,
-                           filter_flag=True, json_flag=True)
+                           filter_flag=True, json_flag=False)
         self._assert_rest_result(result.json(), _('Login session error.'))
         self.token = result.headers['X-Auth-Token']
 
@@ -202,15 +211,22 @@ class RestCommon(object):
             result, 'Query snapshots of volume session error.')
         return result
 
+    @staticmethod
+    def _get_snapshot_from_result(batch_result, snapshot_key, snapshot_name):
+        for res in batch_result.get('snapshotList', []):
+            if res.get(snapshot_key) == snapshot_name:
+                return res
+
     def query_snapshots_of_volume(self, vol_name, snapshot_name):
         batch_num = constants.GET_SNAPSHOT_PAGE_NUM
         batch_size = constants.GET_SNAPSHOT_PAGE_SIZE
         while True:
             batch_result = self._query_snapshot_of_volume_batch(
                 vol_name, snapshot_name, batch_num, batch_size)
-            for res in batch_result.get('snapshotList', []):
-                if res.get('snapshotName') == snapshot_name:
-                    return res
+            snapshot_info = self._get_snapshot_from_result(
+                batch_result, 'snapshotName', snapshot_name)
+            if snapshot_info:
+                return snapshot_info
             if batch_result.get('totalNum') < batch_size:
                 break
             batch_num += 1
@@ -288,9 +304,10 @@ class RestCommon(object):
         while True:
             batch_result = self._query_snapshot_by_name_batch(
                 pool_id, snapshot_name, batch_num, batch_size)
-            for res in batch_result.get("snapshotList", []):
-                if res.get("snapName") == snapshot_name:
-                    return res
+            snapshot_info = self._get_snapshot_from_result(
+                batch_result, 'snapName', snapshot_name)
+            if snapshot_info:
+                return snapshot_info
             if batch_result.get('totalNum') < batch_size:
                 break
             batch_num += 1

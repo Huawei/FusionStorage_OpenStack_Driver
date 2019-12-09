@@ -50,22 +50,23 @@ class FusionStorageConf(object):
         self._san_user()
         self._san_password()
 
+    @staticmethod
+    def _encode_param(encode_param):
+        need_encode = False
+        if encode_param is not None and not encode_param.startswith('!&&&'):
+            encoded = base64.b64encode(six.b(encode_param)).decode()
+            encode_param = '!&&&' + encoded
+            need_encode = True
+        return need_encode, encode_param
+
     def _encode_authentication(self):
         name_node = self.configuration.safe_get(constants.CONF_USER)
         pwd_node = self.configuration.safe_get(constants.CONF_PWD)
 
-        need_encode = False
-        if name_node is not None and not name_node.startswith('!&&&'):
-            encoded = base64.b64encode(six.b(name_node)).decode()
-            name_node = '!&&&' + encoded
-            need_encode = True
+        name_encode, name_node = self._encode_param(name_node)
+        pwd_encode, pwd_node = self._encode_param(pwd_node)
 
-        if pwd_node is not None and not pwd_node.startswith('!&&&'):
-            encoded = base64.b64encode(six.b(pwd_node)).decode()
-            pwd_node = '!&&&' + encoded
-            need_encode = True
-
-        if need_encode:
+        if name_encode or pwd_encode:
             self._rewrite_conf(name_node, pwd_node)
 
     def _rewrite_conf(self, name_node, pwd_node):
