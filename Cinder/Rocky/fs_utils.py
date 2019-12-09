@@ -57,14 +57,19 @@ def get_target_lun(client, host_name, vol_name):
             return hostlun.get("lunId")
 
 
+def _get_target_portal(port_list):
+    for port in port_list:
+        if port.get("iscsiStatus") == "active":
+            return port.get("iscsiPortal"), port.get('targetName')
+    return None, None
+
+
 def get_target_portal(client, target_ip):
     tgt_portal = client.get_target_port(target_ip)
     for node_portal in tgt_portal:
         if node_portal.get("nodeMgrIp") == target_ip:
             port_list = node_portal.get("iscsiPortalList", [])
-            for port in port_list:
-                if port.get("iscsiStatus") == "active":
-                    return port.get("iscsiPortal"), port.get('targetName')
+            return _get_target_portal(port_list)
 
 
 def is_lun_in_host(client, host_name):
@@ -132,13 +137,48 @@ def _get_trigger_qos(qos, client):
     return qos
 
 
+def _is_qos_specs_valid(specs):
+    if specs is None:
+        return False
+
+    if specs.get('consumer') == 'front-end':
+        return False
+    return True
+
+
+def _raise_qos_not_set(qos):
+    for item in constants.QOS_MUST_SET:
+        if item not in qos:
+            msg = _('%s must be set for QoS: %s') % (
+                constants.QOS_MUST_SET, qos)
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+
+def _raise_qos_is_invalid(qos_key):
+    if qos_key not in constants.QOS_KEYS + constants.QOS_SCHEDULER_KEYS:
+        msg = _('QoS key %s is not valid.') % qos_key
+        LOG.error(msg)
+        raise exception.InvalidInput(reason=msg)
+
+
+def _set_qos(qos, qos_key, qos_value):
+    if qos_key in constants.QOS_KEYS:
+        if int(qos_value) <= 0:
+            msg = _('QoS value for %s must > 0.') % qos_key
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        qos[qos_key] = int(qos_value)
+    elif qos_key in constants.QOS_SCHEDULER_KEYS:
+        qos[qos_key] = qos_value.strip()
+    return qos
+
+
 def _get_qos_specs(qos_specs_id, client):
     ctxt = context.get_admin_context()
     specs = qos_specs.get_qos_specs(ctxt, qos_specs_id)
-    if specs is None:
-        return {}
-
-    if specs.get('consumer') == 'front-end':
+    if not _is_qos_specs_valid(specs):
         return {}
 
     kvs = specs.get('specs', {})
@@ -146,30 +186,55 @@ def _get_qos_specs(qos_specs_id, client):
 
     qos = dict()
     for k, v in kvs.items():
-        if k not in constants.QOS_KEYS + constants.QOS_SCHEDULER_KEYS:
-            msg = _('QoS key %s is not valid.') % k
-            LOG.error(msg)
-            raise exception.InvalidInput(reason=msg)
+        _raise_qos_is_invalid(k)
+        qos = _set_qos(qos, k, v)
 
-        if k in constants.QOS_KEYS:
-            if int(v) <= 0:
-                msg = _('QoS value for %s must > 0.') % k
-                LOG.error(msg)
-                raise exception.InvalidInput(reason=msg)
-
-            qos[k] = int(v.encode("utf-8"))
-        elif k in constants.QOS_SCHEDULER_KEYS:
-            qos[k] = v.strip()
-
-    for item in constants.QOS_MUST_SET:
-        if qos.get(item) is None:
-            msg = _('maxIOPS and maxMBPS must be set for QoS: %s') % qos
-            LOG.error(msg)
-            raise exception.InvalidInput(reason=msg)
-
+    _raise_qos_not_set(qos)
     qos = _get_trigger_qos(qos, client)
 
     return qos
+
+
+def _deal_date_increase_or_decrease(is_date_decrease, is_date_increase, qos):
+    if is_date_decrease:
+        config_date_sec = qos[constants.QOS_SCHEDULER_KEYS[1]]
+        qos[constants.QOS_SCHEDULER_KEYS[1]] = (config_date_sec -
+                                                constants.SECONDS_OF_DAY)
+
+    if is_date_increase:
+        config_date_sec = qos[constants.QOS_SCHEDULER_KEYS[1]]
+        qos[constants.QOS_SCHEDULER_KEYS[1]] = (config_date_sec +
+                                                constants.SECONDS_OF_DAY)
+    return qos
+
+
+def _check_default_scheduler(qos, is_default_scheduler, configed_none_default):
+    if is_default_scheduler and configed_none_default:
+        msg = (_("The default scheduler: %(type)s is not allowed to config "
+                 "other scheduler policy")
+               % {"type": qos[constants.QOS_SCHEDULER_KEYS[0]]})
+        LOG.error(msg)
+        raise exception.InvalidInput(msg)
+
+
+def _check_week_scheduler(qos, configed_week_scheduler, configed_none_default):
+    if configed_week_scheduler and (
+            configed_none_default != len(constants.QOS_SCHEDULER_KEYS) - 1):
+        msg = (_("The week scheduler type %(type)s params number are "
+                 "incorrect.")
+               % {"type": qos[constants.QOS_SCHEDULER_KEYS[0]]})
+        LOG.error(msg)
+        raise exception.InvalidInput(msg)
+
+
+def _check_scheduler_count(qos, is_default_scheduler, configed_week_scheduler,
+                           configed_none_default):
+    if (not is_default_scheduler and not configed_week_scheduler and
+            configed_none_default != len(constants.QOS_SCHEDULER_KEYS) - 2):
+        msg = (_("The scheduler type %(type)s params number are incorrect.")
+               % {"type": qos[constants.QOS_SCHEDULER_KEYS[0]]})
+        LOG.error(msg)
+        raise exception.InvalidInput(msg)
 
 
 def _check_and_convert_qos(qos, client):
@@ -185,7 +250,7 @@ def _check_and_convert_qos(qos, client):
         qos, sys_loc_time, configed_none_default)
 
     (qos, configed_none_default,
-     is_date_decrease, is_date_crease) = _convert_start_time(
+     is_date_decrease, is_date_increase) = _convert_start_time(
         qos, client, sys_loc_time, configed_none_default)
 
     qos, configed_none_default = _convert_duration_time(
@@ -194,39 +259,13 @@ def _check_and_convert_qos(qos, client):
     qos, configed_none_default = _convert_day_of_week(
         qos, configed_none_default)
 
-    if is_default_scheduler and configed_none_default:
-        msg = (_("The default scheduler: %(type)s is not allowed to config "
-                 "other scheduler policy")
-               % {"type": qos[constants.QOS_SCHEDULER_KEYS[0]]})
-        LOG.error(msg)
-        raise exception.InvalidInput(msg)
+    _check_default_scheduler(qos, is_default_scheduler, configed_none_default)
+    _check_week_scheduler(qos, configed_week_scheduler, configed_none_default)
+    _check_scheduler_count(qos, is_default_scheduler, configed_week_scheduler,
+                           configed_none_default)
 
-    if configed_week_scheduler and (
-            configed_none_default != len(constants.QOS_SCHEDULER_KEYS) - 1):
-        msg = (_("The week scheduler type %(type)s params number are "
-                 "incorrect.")
-               % {"type": qos[constants.QOS_SCHEDULER_KEYS[0]]})
-        LOG.error(msg)
-        raise exception.InvalidInput(msg)
-
-    if (not is_default_scheduler and not configed_week_scheduler and
-            configed_none_default != len(constants.QOS_SCHEDULER_KEYS) - 2):
-        msg = (_("The scheduler type %(type)s params number are incorrect.")
-               % {"type": qos[constants.QOS_SCHEDULER_KEYS[0]]})
-        LOG.error(msg)
-        raise exception.InvalidInput(msg)
-
-    if is_date_decrease:
-        config_date_sec = qos[constants.QOS_SCHEDULER_KEYS[1]]
-        qos[constants.QOS_SCHEDULER_KEYS[1]] = (config_date_sec -
-                                                constants.SECONDS_OF_DAY)
-
-    if is_date_crease:
-        config_date_sec = qos[constants.QOS_SCHEDULER_KEYS[1]]
-        qos[constants.QOS_SCHEDULER_KEYS[1]] = (config_date_sec +
-                                                constants.SECONDS_OF_DAY)
-
-    return qos
+    return _deal_date_increase_or_decrease(
+        is_date_decrease, is_date_increase, qos)
 
 
 def _get_sys_time(client):
@@ -258,38 +297,54 @@ def _deal_dst_time(time_config, cur_time):
     return cur_is_in_dst
 
 
+def _get_qos_time_params_east_zone(time_zone, config_sec,
+                                   cur_date_in_dst_time):
+    is_date_decrease = False
+    if cur_date_in_dst_time:
+        time_zone += constants.SECONDS_OF_HOUR
+
+    if config_sec >= time_zone:
+        qos_time_params = int(config_sec - time_zone)
+    else:
+        qos_time_params = int(config_sec + (constants.SECONDS_OF_DAY
+                                            - time_zone))
+        is_date_decrease = True
+    return qos_time_params, is_date_decrease
+
+
+def _get_qos_time_params_west_zone(time_zone, config_sec,
+                                   cur_date_in_dst_time):
+    is_date_increase = False
+    if cur_date_in_dst_time:
+        time_zone -= constants.SECONDS_OF_HOUR
+    if config_sec + time_zone < constants.SECONDS_OF_DAY:
+        qos_time_params = int(config_sec + time_zone)
+    else:
+        qos_time_params = int(config_sec + time_zone -
+                              constants.SECONDS_OF_DAY)
+        is_date_increase = True
+    return qos_time_params, is_date_increase
+
+
 def _get_qos_time_params(zone_flag, time_zone, config_sec,
                          cur_date_in_dst_time):
     LOG.info("time_zone is: %(time_zone)s, zone flag is: %(zone)s "
              "config time_seconds is: %(config)s",
              {"time_zone": time_zone, "zone": zone_flag,
               "config": config_sec})
-    is_date_crease = False
+    is_date_increase = False
     is_date_decrease = False
     if zone_flag:
-        if cur_date_in_dst_time:
-            time_zone += constants.SECONDS_OF_HOUR
-
-        if config_sec >= time_zone:
-            qos_time_params = int(config_sec - time_zone)
-        else:
-            qos_time_params = int(config_sec + (constants.SECONDS_OF_DAY
-                                                - time_zone))
-            is_date_decrease = True
+        qos_time_params, is_date_decrease = _get_qos_time_params_east_zone(
+            time_zone, config_sec, cur_date_in_dst_time)
     else:
-        if cur_date_in_dst_time:
-            time_zone -= constants.SECONDS_OF_HOUR
-        if config_sec + time_zone < constants.SECONDS_OF_DAY:
-            qos_time_params = int(config_sec + time_zone)
-        else:
-            qos_time_params = int(config_sec + time_zone -
-                                  constants.SECONDS_OF_DAY)
-            is_date_crease = True
+        qos_time_params, is_date_increase = _get_qos_time_params_west_zone(
+            time_zone, config_sec, cur_date_in_dst_time)
     LOG.info("qos time is: %(time)s, is_date_decrease is %(decrease)s, "
-             "is_date_crease is %(crease)s" % {"time": qos_time_params,
+             "is_date_increase is %(crease)s" % {"time": qos_time_params,
                                                "decrease": is_date_decrease,
-                                               "crease": is_date_crease})
-    return qos_time_params, is_date_decrease, is_date_crease
+                                               "crease": is_date_increase})
+    return qos_time_params, is_date_decrease, is_date_increase
 
 
 def _convert_schedule_type(qos):
@@ -352,7 +407,7 @@ def _convert_start_date(qos, sys_loc_time, configed_none_default):
 def _convert_start_time(qos, client, sys_loc_time, configed_none_default):
     start_date = constants.QOS_SCHEDULER_KEYS[1]
     start_time = constants.QOS_SCHEDULER_KEYS[2]
-    is_date_crease = False
+    is_date_increase = False
     is_date_decrease = False
     sys_dst_time = time.strftime("%m-%d %H:%M:%S", sys_loc_time)
     if qos.get(start_time):
@@ -381,13 +436,13 @@ def _convert_start_time(qos, client, sys_loc_time, configed_none_default):
         zone_flag, time_zone = _get_diff_time(time_config)
 
         (qos_time_params, is_date_decrease,
-         is_date_crease) = _get_qos_time_params(
+         is_date_increase) = _get_qos_time_params(
             zone_flag, time_zone, config_sec,
             cur_date_in_dst_time)
 
         qos[start_time] = qos_time_params
         configed_none_default += 1
-    return qos, configed_none_default, is_date_decrease, is_date_crease
+    return qos, configed_none_default, is_date_decrease, is_date_increase
 
 
 def _convert_duration_time(qos, configed_none_default):
@@ -415,17 +470,21 @@ def _convert_duration_time(qos, configed_none_default):
     return qos, configed_none_default
 
 
+def _is_config_weekday_valid(config_days_list, config_days):
+    for config in config_days_list:
+        if config not in constants.WEEK_DAYS:
+            msg = (_("The week day %s is illegal.") % config_days)
+            LOG.error(msg)
+            raise exception.InvalidInput(msg)
+
+
 def _convert_day_of_week(qos, configed_none_default):
     day_of_week = constants.QOS_SCHEDULER_KEYS[4]
     if qos.get(day_of_week):
         # Convert the week days
         config_days = 0
         config_days_list = qos[day_of_week].split()
-        for config in config_days_list:
-            if config not in constants.WEEK_DAYS:
-                msg = (_("The week day %s is illegal.") % qos[day_of_week])
-                LOG.error(msg)
-                raise exception.InvalidInput(msg)
+        _is_config_weekday_valid(config_days_list, qos[day_of_week])
 
         for index in range(len(constants.WEEK_DAYS)):
             if constants.WEEK_DAYS[index] in config_days_list:
