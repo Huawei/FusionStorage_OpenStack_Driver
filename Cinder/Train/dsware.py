@@ -24,6 +24,7 @@ from cinder import exception
 from cinder.i18n import _
 from cinder import interface
 from cinder.volume import driver
+from cinder.volume.drivers.fusionstorage import constants
 from cinder.volume.drivers.fusionstorage import fs_client
 from cinder.volume.drivers.fusionstorage import fs_conf
 from cinder.volume.drivers.fusionstorage import fs_flow
@@ -107,7 +108,13 @@ volume_opts = [
                 default=[],
                 help='The ips of FSA node were used to find the target '
                      'initiator and target ips in ISCSI initialize connection.'
-                     ' For example: "target_ips = ip1, ip2"')
+                     ' For example: "target_ips = ip1, ip2"'),
+    cfg.IntOpt('scan_device_timeout',
+               default=3,
+               help='scan_device_timeout indicates the waiting time for '
+                    'scanning device disks on the host. It only takes effect'
+                    ' on SCSI. Default value is 3, the type is Int, the unit '
+                    'is seconds. For example: "scan_device_timeout = 5"')
 ]
 
 CONF = cfg.CONF
@@ -184,8 +191,10 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         total = float(pool_info['totalCapacity']) / units.Ki
         free = (float(pool_info['totalCapacity']) -
                 float(pool_info['usedCapacity'])) / units.Ki
+        provisioned = float(pool_info['usedCapacity']) / units.Ki
         pool_capacity['total_capacity_gb'] = total
         pool_capacity['free_capacity_gb'] = free
+        pool_capacity['provisioned_capacity_gb'] = provisioned
 
         return pool_capacity
 
@@ -196,6 +205,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
             "pool_name": pool_info['poolName'],
             "total_capacity_gb": capacity['total_capacity_gb'],
             "free_capacity_gb": capacity['free_capacity_gb'],
+            "provisioned_capacity_gb": capacity['provisioned_capacity_gb'],
             "QoS_support": True,
             'multiattach': True,
         })
@@ -543,6 +553,52 @@ class DSWAREBaseDriver(driver.VolumeDriver):
 
         return True, None
 
+    def _rollback_snapshot(self, vol_name, snap_name):
+        def _snapshot_rollback_finish():
+            snapshot_info = self.client.get_snapshot_info_by_name(snap_name)
+            if not snapshot_info:
+                msg = (_("Failed to get rollback info with snapshot %s.")
+                       % snap_name)
+                self._raise_exception(msg)
+
+            if snapshot_info.get('health_status') not in (
+                    constants.SNAPSHOT_HEALTH_STATS_NORMAL,):
+                msg = _("The snapshot %s is abnormal.") % snap_name
+                self._raise_exception(msg)
+
+            if (snapshot_info.get('rollback_progress') ==
+                    constants.SNAPSHOT_ROLLBACK_PROGRESS_FINISH or
+                    snapshot_info.get('rollback_endtime')):
+                LOG.info("Snapshot %s rollback successful.", snap_name)
+                return True
+            return False
+
+        if fs_utils.is_snapshot_rollback_available(self.client, snap_name):
+            self.client.rollback_snapshot(vol_name, snap_name)
+
+        try:
+            fs_utils.wait_for_condition(
+                _snapshot_rollback_finish, constants.WAIT_INTERVAL,
+                constants.SNAPSHOT_ROLLBACK_TIMEOUT)
+        except exception.VolumeBackendAPIException:
+            self.client.cancel_rollback_snapshot(snap_name)
+            raise
+
+    def revert_to_snapshot(self, context, volume, snapshot):
+        vol_name = self._get_vol_name(volume)
+        snap_name = self._get_snapshot_name(snapshot)
+        if not self._check_snapshot_exist(snapshot.volume, snapshot):
+            msg = _("Snapshot: %(name)s does not exist!"
+                    ) % {"name": snap_name}
+            self._raise_exception(msg)
+
+        if not self._check_volume_exist(volume):
+            msg = _("Volume: %(vol_name)s does not exist!"
+                    ) % {'vol_name': vol_name}
+            self._raise_exception(msg)
+
+        self._rollback_snapshot(vol_name, snap_name)
+
     def create_export(self, context, volume, connector):
         pass
 
@@ -604,6 +660,11 @@ class DSWAREDriver(DSWAREBaseDriver):
         vol_wwn = volume_info.get('wwn')
         by_id_path = "/dev/disk/by-id/" + "wwn-0x%s" % vol_wwn
         properties = {'device_path': by_id_path}
+        import time
+        LOG.info("Wait %(t)s second(s) for scanning the target device %(dev)s."
+                 % {"t": self.configuration.scan_device_timeout,
+                    "dev": by_id_path})
+        time.sleep(self.configuration.scan_device_timeout)
         return {'driver_volume_type': 'local',
                 'data': properties}
 

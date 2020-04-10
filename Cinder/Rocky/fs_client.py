@@ -108,7 +108,13 @@ class RestCommon(object):
         return self._deal_call_result(result, filter_flag, json_flag, req_dict)
 
     def _assert_rest_result(self, result, err_str):
-        if result.get('result') != 0:
+        if isinstance(result.get('result'), dict):
+            if result['result'].get("code") != 0:
+                msg = (_('%(err)s\nresult: %(res)s.') % {'err': err_str,
+                                                         'res': result})
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=msg)
+        elif result.get('result') != 0:
             msg = (_('%(err)s\nresult: %(res)s.') % {'err': err_str,
                                                      'res': result})
             LOG.error(msg)
@@ -577,3 +583,29 @@ class RestCommon(object):
         if result.get("data"):
             return result.get("data")[0]
         return {}
+
+    def get_snapshot_info_by_name(self, snapshot_name):
+        url = "/api/v2/block_service/snapshots"
+        params = {"name": snapshot_name}
+        result = self.call(url, "GET", params, get_system_time=True)
+        self._assert_rest_result(
+            result, _("Get snapshot info session error."))
+        return result.get("data", {})
+
+    def rollback_snapshot(self, vol_name, snapshot_name):
+        url = "/snapshot/rollback"
+        params = {"snapshotName": snapshot_name,
+                  "volumeName": vol_name
+                  }
+        result = self.call(url, "POST", params)
+        self._assert_rest_result(
+            result, _("Rollback snapshot session error."))
+
+    def cancel_rollback_snapshot(self, snapshot_name):
+        url = "/api/v2/block_service/snapshots"
+        params = {"name": snapshot_name,
+                  "action": "cancel_rollback"
+                  }
+        result = self.call(url, "POST", params, get_system_time=True)
+        self._assert_rest_result(
+            result, _("Cancel rollback snapshot session error."))

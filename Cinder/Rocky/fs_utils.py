@@ -18,6 +18,7 @@ import pytz
 import time
 
 from oslo_log import log as logging
+from oslo_service import loopingcall
 
 from cinder import context
 from cinder import exception
@@ -341,9 +342,10 @@ def _get_qos_time_params(zone_flag, time_zone, config_sec,
         qos_time_params, is_date_increase = _get_qos_time_params_west_zone(
             time_zone, config_sec, cur_date_in_dst_time)
     LOG.info("qos time is: %(time)s, is_date_decrease is %(decrease)s, "
-             "is_date_increase is %(crease)s" % {"time": qos_time_params,
-                                               "decrease": is_date_decrease,
-                                               "crease": is_date_increase})
+             "is_date_increase is %(crease)s" %
+             {"time": qos_time_params,
+              "decrease": is_date_decrease,
+              "crease": is_date_increase})
     return qos_time_params, is_date_decrease, is_date_increase
 
 
@@ -381,13 +383,14 @@ def _get_diff_time(time_config):
 def _convert_start_date(qos, sys_loc_time, configed_none_default):
     start_date = constants.QOS_SCHEDULER_KEYS[1]
     sys_date_time = time.strftime("%Y-%m-%d", sys_loc_time)
+    diff_utc_time = time.altzone if time.daylight else time.timezone
     if qos.get(start_date):
         # Convert the config date to timestamp
         cur_date = time.mktime(time.strptime(
-            sys_date_time, '%Y-%m-%d')) - time.timezone
+            sys_date_time, '%Y-%m-%d')) - diff_utc_time
         try:
             config_date = time.mktime(time.strptime(
-                qos[start_date], '%Y-%m-%d')) - time.timezone
+                qos[start_date], '%Y-%m-%d')) - diff_utc_time
         except Exception as err:
             msg = (_("The start date %(date)s is illegal. Reason: %(err)s")
                    % {"date": qos[start_date], "err": err})
@@ -504,3 +507,49 @@ def get_volume_specs(client, vol_name):
             qos_info[key] = int(value)
     vol_info['qos'] = qos_info
     return vol_info
+
+
+def is_snapshot_rollback_available(client, snap_name):
+    snapshot_info = client.get_snapshot_info_by_name(snap_name)
+
+    running_status = snapshot_info.get("running_status")
+    health_status = snapshot_info.get("health_status")
+
+    if running_status not in (
+            constants.SNAPSHOT_RUNNING_STATUS_ONLINE,
+            constants.SNAPSHOT_RUNNING_STATUS_ROLLBACKING):
+        err_msg = (_("The running status %(status)s of snapshot %(name)s.")
+                   % {"status": running_status, "name": snap_name})
+        LOG.error(err_msg)
+        raise exception.InvalidSnapshot(reason=err_msg)
+
+    if health_status not in (constants.SNAPSHOT_HEALTH_STATS_NORMAL, ):
+        err_msg = (_("The health status %(status)s of snapshot %(name)s.")
+                   % {"status": running_status, "name": snap_name})
+        LOG.error(err_msg)
+        raise exception.InvalidSnapshot(reason=err_msg)
+
+    if constants.SNAPSHOT_RUNNING_STATUS_ONLINE == snapshot_info.get(
+            'running_status'):
+        return True
+
+    return False
+
+
+def wait_for_condition(func, interval, timeout):
+    start_time = time.time()
+
+    def _inner():
+        result = func()
+
+        if result:
+            raise loopingcall.LoopingCallDone()
+
+        if int(time.time()) - start_time > timeout:
+            msg = (_('wait_for_condition: %s timed out.')
+                   % func.__name__)
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+
+    timer = loopingcall.FixedIntervalLoopingCall(_inner)
+    timer.start(interval=interval).wait()
