@@ -284,8 +284,8 @@ class GetISCSIProperties(task.Task):
 
 def get_iscsi_required_params(vol_name, connector, client=None):
     if "host" in connector:
-        host_name = connector['host']
-        host_group_name = constants.HOST_GROUP_PREFIX + host_name
+        host_name = fs_utils.encode_host_name(connector['host'])
+        host_group_name = fs_utils.encode_host_group_name(host_name)
         initiator_name = connector['initiator']
         multipath = connector.get("multipath")
     else:
@@ -298,7 +298,7 @@ def get_iscsi_required_params(vol_name, connector, client=None):
             return None, None, None, None, None
         elif len(host_list) == 1:
             host_name = host_list[0]['hostName']
-            host_group_name = constants.HOST_GROUP_PREFIX + host_name
+            host_group_name = fs_utils.encode_host_group_name(host_name)
             initiator_name = None
             multipath = None
         else:

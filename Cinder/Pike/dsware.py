@@ -250,13 +250,13 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         return vol_name
 
     def _add_qos_to_volume(self, volume, vol_name):
-        opts = fs_utils.get_volume_params(volume, self.client)
-        if opts.get("qos"):
-            try:
+        try:
+            opts = fs_utils.get_volume_params(volume, self.client)
+            if opts.get("qos"):
                 self.fs_qos.add(opts["qos"], vol_name)
-            except Exception:
-                self.client.delete_volume(vol_name=vol_name)
-                raise
+        except Exception:
+            self.client.delete_volume(vol_name=vol_name)
+            raise
 
     def create_volume(self, volume):
         pool_id = self._get_pool_id(volume)
