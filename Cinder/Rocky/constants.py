@@ -38,7 +38,7 @@ CONF_PWD = "san_password"
 CONF_USER = "san_login"
 
 QOS_MUST_SET = ["maxIOPS", "maxMBPS"]
-QOS_KEYS = ["maxIOPS", "maxMBPS", "minBaselineIOPS", "minBaselineMBPS"]
+QOS_KEYS = ["maxIOPS", "maxMBPS", "total_iops_sec", "total_bytes_sec"]
 QOS_SCHEDULER_KEYS = ["scheduleType", "startDate", "startTime",
                       "durationTime", "dayOfWeek"]
 QOS_PREFIX = "OpenStack_"
@@ -59,3 +59,6 @@ SNAPSHOT_ROLLBACK_TIMEOUT = 60 * 60 * 24
 WAIT_INTERVAL = 10
 WEEK_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thur", "Fri", "Sat"]
 TIMEZONE = {"Asia/Beijing": "Asia/Shanghai"}
+MAX_NAME_LENGTH = 31
+MAX_IOPS_VALUE = 999999999
+MAX_MBPS_VALUE = 999999

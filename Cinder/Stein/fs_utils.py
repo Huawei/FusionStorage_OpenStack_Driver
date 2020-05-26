@@ -14,11 +14,13 @@
 #    under the License.
 
 import datetime
+import hashlib
 import pytz
 import time
 
 from oslo_log import log as logging
 from oslo_service import loopingcall
+from oslo_utils import units
 
 from cinder import context
 from cinder import exception
@@ -148,12 +150,11 @@ def _is_qos_specs_valid(specs):
 
 
 def _raise_qos_not_set(qos):
-    for item in constants.QOS_MUST_SET:
-        if item not in qos:
-            msg = _('%s must be set for QoS: %s') % (
-                constants.QOS_MUST_SET, qos)
-            LOG.error(msg)
-            raise exception.InvalidInput(reason=msg)
+    if not set(constants.QOS_MUST_SET).intersection(set(qos.keys())):
+        msg = _('One of %s must be set for QoS: %s') % (
+            constants.QOS_KEYS, qos)
+        LOG.error(msg)
+        raise exception.InvalidInput(reason=msg)
 
 
 def _raise_qos_is_invalid(qos_key):
@@ -170,10 +171,33 @@ def _set_qos(qos, qos_key, qos_value):
             LOG.error(msg)
             raise exception.InvalidInput(reason=msg)
 
-        qos[qos_key] = int(qos_value)
+        # the maxIOPS priority is greater than total_iops_sec and
+        # the maxMBPS priority is greater than total_bytes_sec
+        if qos_key == "maxIOPS":
+            qos['maxIOPS'] = int(qos_value)
+        elif qos_key == "total_iops_sec" and qos.get("maxIOPS") is None:
+            qos['maxIOPS'] = int(qos_value)
+        elif qos_key == "maxMBPS":
+            qos['maxMBPS'] = int(qos_value)
+        elif qos_key == "total_bytes_sec" and qos.get("maxMBPS") is None:
+            qos_value = int(qos_value)
+            if 0 < qos_value < units.Mi:
+                qos_value = units.Mi
+            qos['maxMBPS'] = int(qos_value / units.Mi)
     elif qos_key in constants.QOS_SCHEDULER_KEYS:
         qos[qos_key] = qos_value.strip()
     return qos
+
+
+def _set_default_qos(qos):
+    if not qos.get('maxIOPS'):
+        qos["maxIOPS"] = constants.MAX_IOPS_VALUE
+    if not qos.get('maxMBPS'):
+        qos["maxMBPS"] = constants.MAX_MBPS_VALUE
+    if "total_iops_sec" in qos:
+        qos.pop("total_iops_sec")
+    if "total_bytes_sec" in qos:
+        qos.pop("total_bytes_sec")
 
 
 def _get_qos_specs(qos_specs_id, client):
@@ -191,6 +215,7 @@ def _get_qos_specs(qos_specs_id, client):
         qos = _set_qos(qos, k, v)
 
     _raise_qos_not_set(qos)
+    _set_default_qos(qos)
     qos = _get_trigger_qos(qos, client)
 
     return qos
@@ -553,3 +578,19 @@ def wait_for_condition(func, interval, timeout):
 
     timer = loopingcall.FixedIntervalLoopingCall(_inner)
     timer.start(interval=interval).wait()
+
+
+def encode_host_name(host_name):
+    if host_name and len(host_name) > constants.MAX_NAME_LENGTH:
+        encoded_name = hashlib.md5(host_name.encode('utf-8')).hexdigest()
+        return encoded_name[:constants.MAX_NAME_LENGTH]
+    else:
+        return host_name
+
+
+def encode_host_group_name(host_name):
+    host_group_name = constants.HOST_GROUP_PREFIX + host_name
+    if host_group_name and len(host_group_name) > constants.MAX_NAME_LENGTH:
+        return host_name
+    else:
+        return host_group_name
