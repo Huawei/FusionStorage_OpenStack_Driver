@@ -266,6 +266,8 @@ class RestCommon(object):
         url = '/volume/delete'
         params = {"volNames": [vol_name]}
         result = self.call(url, "POST", params)
+        if result.get('errorCode') in constants.VOLUME_NOT_EXIST:
+            return None
         self._assert_rest_result(result, _('Delete volume session error.'))
 
     def attach_volume(self, vol_name, manage_ip):
@@ -329,6 +331,8 @@ class RestCommon(object):
         url = '/snapshot/delete/'
         params = {"snapshotName": snapshot_name}
         result = self.call(url, "POST", params)
+        if result.get('errorCode') in constants.SNAPSHOT_NOT_EXIST:
+            return None
         self._assert_rest_result(result, _('Delete snapshot session error.'))
 
     def create_volume_from_snapshot(self, snapshot_name, vol_name, vol_size):
@@ -609,3 +613,18 @@ class RestCommon(object):
         result = self.call(url, "POST", params, get_system_time=True)
         self._assert_rest_result(
             result, _("Cancel rollback snapshot session error."))
+
+    def get_iscsi_portal(self):
+        url = "/dsware/service/cluster/dswareclient/queryIscsiPortal"
+        result = self.call(url, "POST", data={}, get_system_time=True)
+        self._assert_rest_result(
+            result, _("Get ISCSI portal session error."))
+        return result.get("nodeResultList", [])
+
+    def get_host_iscsi_service(self, host_name):
+        url = "/api/v2/block_service/iscsi_sessions"
+        params = {"host_name": host_name}
+        result = self.call(url, "GET", params, get_system_time=True)
+        self._assert_rest_result(
+            result, _("Get host iscsi service session error."))
+        return result.get("data", [])
