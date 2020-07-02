@@ -36,60 +36,6 @@ from cinder.volume import utils as volume_utils
 LOG = logging.getLogger(__name__)
 
 volume_opts = [
-    cfg.BoolOpt("dsware_isthin",
-                default=False,
-                help='The flag of thin storage allocation.',
-                deprecated_for_removal=True,
-                deprecated_since='14.0.0',
-                deprecated_reason='FusionStorage cinder driver refactored the '
-                                  'code with Restful method and the old CLI '
-                                  'mode has been abandon. So those '
-                                  'configuration items are no longer used.'),
-    cfg.StrOpt("dsware_manager",
-               default='',
-               help='Fusionstorage manager ip addr for cinder-volume.',
-               deprecated_for_removal=True,
-               deprecated_since='14.0.0',
-               deprecated_reason='FusionStorage cinder driver refactored the '
-                                 'code with Restful method and the old CLI '
-                                 'mode has been abandon. So those '
-                                 'configuration items are no longer used.'),
-    cfg.StrOpt('fusionstorageagent',
-               default='',
-               help='Fusionstorage agent ip addr range',
-               deprecated_for_removal=True,
-               deprecated_since='14.0.0',
-               deprecated_reason='FusionStorage cinder driver refactored the '
-                                 'code with Restful method and the old CLI '
-                                 'mode has been abandon. So those '
-                                 'configuration items are no longer used.'),
-    cfg.StrOpt('pool_type',
-               default='default',
-               help='Pool type, like sata-2copy',
-               deprecated_for_removal=True,
-               deprecated_since='14.0.0',
-               deprecated_reason='FusionStorage cinder driver refactored the '
-                                 'code with Restful method and the old CLI '
-                                 'mode has been abandon. So those '
-                                 'configuration items are no longer used.'),
-    cfg.ListOpt('pool_id_filter',
-                default=[],
-                help='Pool id permit to use',
-                deprecated_for_removal=True,
-                deprecated_since='14.0.0',
-                deprecated_reason='FusionStorage cinder driver refactored the '
-                                  'code with Restful method and the old CLI '
-                                  'mode has been abandon. So those '
-                                  'configuration items are no longer used.'),
-    cfg.IntOpt('clone_volume_timeout',
-               default=680,
-               help='Create clone volume timeout',
-               deprecated_for_removal=True,
-               deprecated_since='14.0.0',
-               deprecated_reason='FusionStorage cinder driver refactored the '
-                                 'code with Restful method and the old CLI '
-                                 'mode has been abandon. So those '
-                                 'configuration items are no longer used.'),
     cfg.DictOpt('manager_ips',
                 default={},
                 help='This option is to support the FSA to mount across the '
@@ -114,7 +60,17 @@ volume_opts = [
                help='scan_device_timeout indicates the waiting time for '
                     'scanning device disks on the host. It only takes effect'
                     ' on SCSI. Default value is 3, the type is Int, the unit '
-                    'is seconds. For example: "scan_device_timeout = 5"')
+                    'is seconds. For example: "scan_device_timeout = 5"'),
+    cfg.ListOpt('iscsi_manager_groups',
+                default=[],
+                help='The ips group of FSA node were used to find the target '
+                     'initiator and target ips in ISCSI in order to balance '
+                     'business network. For example: '
+                     '"iscsi_manager_groups = "ip1;ip2;ip3", "ip4;ip5;ip6"'),
+    cfg.BoolOpt('use_ipv6',
+                default=False,
+                help='Whether to return target_portal and target_iqn in '
+                     'IPV6 format')
 ]
 
 CONF = cfg.CONF
@@ -123,7 +79,7 @@ CONF.register_opts(volume_opts)
 
 @interface.volumedriver
 class DSWAREBaseDriver(driver.VolumeDriver):
-    VERSION = '2.0'
+    VERSION = '2.2.RC1'
     CI_WIKI_NAME = 'Huawei_FusionStorage_CI'
 
     def __init__(self, *args, **kwargs):
@@ -139,6 +95,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         self.conf = fs_conf.FusionStorageConf(self.configuration, self.host)
         self.client = None
         self.fs_qos = None
+        self.manager_groups = self.configuration.iscsi_manager_groups
 
     @staticmethod
     def get_driver_options():
@@ -172,7 +129,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         backend_name = self.configuration.safe_get(
             'volume_backend_name') or self.__class__.__name__
         data = {"volume_backend_name": backend_name,
-                "driver_version": "2.0.9",
+                "driver_version": "2.2.RC1",
                 "thin_provisioning_support": False,
                 "pools": [],
                 "vendor_name": "Huawei"
@@ -611,7 +568,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
 
 class DSWAREDriver(DSWAREBaseDriver):
     def get_volume_stats(self, refresh=False):
-        stats = DSWAREBaseDriver.get_volume_stats(self, refresh=False)
+        stats = DSWAREBaseDriver.get_volume_stats(self, refresh)
         stats['storage_protocol'] = 'SCSI'
         return stats
 
@@ -677,8 +634,13 @@ class DSWAREDriver(DSWAREBaseDriver):
 
 
 class DSWAREISCSIDriver(DSWAREBaseDriver):
+    def check_for_setup_error(self):
+        DSWAREBaseDriver.check_for_setup_error(self)
+        fs_utils.check_iscsi_group_valid(
+            self.client, self.manager_groups, self.configuration.use_ipv6)
+
     def get_volume_stats(self, refresh=False):
-        stats = DSWAREBaseDriver.get_volume_stats(self, refresh=False)
+        stats = DSWAREBaseDriver.get_volume_stats(self, refresh)
         stats['storage_protocol'] = 'iSCSI'
         return stats
 
@@ -694,9 +656,12 @@ class DSWAREISCSIDriver(DSWAREBaseDriver):
 
         vol_name = self._get_vol_name(volume)
         properties = fs_flow.initialize_iscsi_connection(
-            self.client, vol_name, connector, self.configuration)
+            self.client, vol_name, connector, self.configuration,
+            self.manager_groups)
 
-        LOG.info("Finish initialize iscsi connection, return: %s", properties)
+        LOG.info("Finish initialize iscsi connection, return: %s, the "
+                 "remaining manager groups are %s",
+                 properties, self.manager_groups)
         return {'driver_volume_type': 'iscsi', 'data': properties}
 
     def terminate_connection(self, volume, connector, **kwargs):

@@ -13,9 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import ipaddress
 from oslo_log import log as logging
-import six
 
 import taskflow.engines
 from taskflow.patterns import linear_flow
@@ -24,7 +22,6 @@ from taskflow.types import failure
 
 from cinder import exception
 from cinder.i18n import _
-from cinder.volume.drivers.fusionstorage import constants
 from cinder.volume.drivers.fusionstorage import fs_utils
 
 
@@ -230,10 +227,11 @@ class UnMapLunFromHostTask(task.Task):
 class GetISCSIProperties(task.Task):
     default_provides = 'properties'
 
-    def __init__(self, client, configuration, *args, **kwargs):
+    def __init__(self, client, configuration, manager_groups, *args, **kwargs):
         super(GetISCSIProperties, self).__init__(*args, **kwargs)
         self.client = client
         self.configuration = configuration
+        self.manager_groups = manager_groups
 
     @staticmethod
     def _construct_properties(multipath, target_lun, target_ips, target_iqns):
@@ -252,31 +250,58 @@ class GetISCSIProperties(task.Task):
             })
         return properties
 
-    def execute(self, host_name, vol_name, multipath):
-        LOG.info("Get ISCSI initialize connection properties.")
-        target_ips = []
-        target_iqns = []
-
-        target_lun = fs_utils.get_target_lun(self.client, host_name, vol_name)
-        for ip in self.configuration.target_ips:
+    def _find_target_ips(self):
+        config_target_ips = self.configuration.target_ips
+        target_ips, target_iqns = [], []
+        for tgt_ip in config_target_ips:
             target_ip, target_iqn = fs_utils.get_target_portal(
-                self.client, ip)
-            ip_addr = ipaddress.ip_address(six.text_type(ip))
+                self.client, tgt_ip, self.configuration.use_ipv6)
             if not target_ip:
                 continue
-            if ip_addr.version == 6:
-                split_target_ip = target_ip.split(":")
-                target_ip = '[' + ":".join(split_target_ip[:-1]) + ']' + ":"\
-                            + split_target_ip[-1]
-            target_ips.append(target_ip)
+
+            target_portal, __ = fs_utils.format_target_portal(target_ip)
+            target_ips.append(target_portal)
             target_iqns.append(target_iqn)
-            if not multipath:
-                break
 
         if not target_ips:
-            msg = _("There is no valid target ip.")
-            LOG.error(msg)
-            raise exception.InvalidInput(reason=msg)
+            msg = _("There is no valid target ip in %s.") % config_target_ips
+            LOG.warning(msg)
+            raise exception.InvalidInput(msg)
+
+        return target_ips, target_iqns
+
+    def _find_iscsi_ips(self, host_name):
+        valid_iscsi_ips, valid_node_ips = fs_utils.get_valid_iscsi_info(
+            self.client)
+        target_ips, target_iqns = fs_utils.get_iscsi_info_from_host(
+            self.client, host_name, valid_iscsi_ips)
+
+        iscsi_manager_groups = self.configuration.iscsi_manager_groups
+        if not target_ips:
+            target_ips, target_iqns = fs_utils.get_iscsi_info_from_conf(
+                self.manager_groups, iscsi_manager_groups,
+                self.configuration.use_ipv6,
+                valid_iscsi_ips, valid_node_ips)
+
+        if not target_ips:
+            msg = (_(
+                "Can not find a valid target ip in iscsi_manager_groups %s")
+                   % iscsi_manager_groups)
+            LOG.warning(msg)
+            raise exception.InvalidInput(msg)
+
+        LOG.info("Get iscsi target info, target ips: %s, target iqns: %s"
+                 % (target_ips, target_iqns))
+        return target_ips, target_iqns
+
+    def execute(self, host_name, vol_name, multipath):
+        LOG.info("Get ISCSI initialize connection properties.")
+        target_lun = fs_utils.get_target_lun(self.client, host_name, vol_name)
+
+        if self.configuration.iscsi_manager_groups:
+            target_ips, target_iqns = self._find_iscsi_ips(host_name)
+        else:
+            target_ips, target_iqns = self._find_target_ips()
 
         return self._construct_properties(multipath, target_lun,
                                           target_ips, target_iqns)
@@ -315,7 +340,8 @@ def get_iscsi_required_params(vol_name, connector, client=None):
     return vol_name, host_name, host_group_name, initiator_name, multipath
 
 
-def initialize_iscsi_connection(client, vol_name, connector, configuration):
+def initialize_iscsi_connection(client, vol_name, connector, configuration,
+                                manager_groups):
     (vol_name, host_name, host_group_name, initiator_name,
      multipath) = get_iscsi_required_params(vol_name, connector)
 
@@ -323,7 +349,8 @@ def initialize_iscsi_connection(client, vol_name, connector, configuration):
                   'host_name': host_name,
                   'host_group_name': host_group_name,
                   'initiator_name': initiator_name,
-                  'multipath': multipath}
+                  'multipath': multipath,
+                  'connector_host_name': connector.get("host")}
     work_flow = linear_flow.Flow('initialize_iscsi_connection')
 
     if fs_utils.is_volume_associate_to_host(client, vol_name, host_name):
@@ -340,7 +367,7 @@ def initialize_iscsi_connection(client, vol_name, connector, configuration):
         )
 
     work_flow.add(
-        GetISCSIProperties(client, configuration)
+        GetISCSIProperties(client, configuration, manager_groups)
     )
 
     engine = taskflow.engines.load(work_flow, store=store_spec)

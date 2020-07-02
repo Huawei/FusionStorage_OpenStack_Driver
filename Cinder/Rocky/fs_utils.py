@@ -15,7 +15,10 @@
 
 import datetime
 import hashlib
+import ipaddress
 import pytz
+import random
+import six
 import time
 
 from oslo_log import log as logging
@@ -60,19 +63,24 @@ def get_target_lun(client, host_name, vol_name):
             return hostlun.get("lunId")
 
 
-def _get_target_portal(port_list):
+def _get_target_portal(port_list, use_ipv6):
     for port in port_list:
         if port.get("iscsiStatus") == "active":
+            iscsi_portal = ":".join(port.get("iscsiPortal").split(":")[:-1])
+            ip_addr = ipaddress.ip_address(six.text_type(iscsi_portal))
+            if use_ipv6 ^ ip_addr.version == 6:
+                continue
+
             return port.get("iscsiPortal"), port.get('targetName')
     return None, None
 
 
-def get_target_portal(client, target_ip):
+def get_target_portal(client, target_ip, use_ipv6):
     tgt_portal = client.get_target_port(target_ip)
     for node_portal in tgt_portal:
         if node_portal.get("nodeMgrIp") == target_ip:
             port_list = node_portal.get("iscsiPortalList", [])
-            return _get_target_portal(port_list)
+            return _get_target_portal(port_list, use_ipv6)
 
 
 def is_lun_in_host(client, host_name):
@@ -594,3 +602,136 @@ def encode_host_group_name(host_name):
         return host_name
     else:
         return host_group_name
+
+
+def get_valid_iscsi_info(client):
+    valid_iscsi_ips = {}
+    valid_node_ips = {}
+    all_iscsi_portal = client.get_iscsi_portal()
+    for iscsi_info in all_iscsi_portal:
+        if iscsi_info['status'] != 'successful':
+            continue
+        iscsi_portal_list = iscsi_info["iscsiPortalList"]
+        iscsi_ips = []
+        for portal in iscsi_portal_list:
+            if portal["iscsiStatus"] == "active":
+                target_portal, iscsi_ip = format_target_portal(
+                    portal["iscsiPortal"])
+
+                iscsi_ips.append(iscsi_ip)
+                valid_iscsi_ips[iscsi_ip] = {
+                    "iscsi_portal": target_portal,
+                    "iscsi_target_iqn": portal["targetName"]}
+        valid_node_ips[iscsi_info["nodeMgrIp"]] = iscsi_ips
+
+    LOG.info("valid iscsi ips info is: %s, valid node ips is %s",
+             valid_iscsi_ips, valid_node_ips)
+    return valid_iscsi_ips, valid_node_ips
+
+
+def _check_iscsi_ip_valid(iscsi_ip, valid_node_ips, use_ipv6):
+    if iscsi_ip not in valid_node_ips.keys():
+        msg = _('The config iscsi group %s is not valid node.') % iscsi_ip
+        LOG.error(msg)
+        raise exception.InvalidInput(reason=msg)
+
+    target_ips = valid_node_ips[iscsi_ip]
+    is_ipv4 = False
+    is_ipv6 = False
+    for target_ip in target_ips:
+        ip_addr = ipaddress.ip_address(six.text_type(target_ip))
+        if ip_addr.version == 6:
+            is_ipv6 = True
+        else:
+            is_ipv4 = True
+
+    if not (is_ipv6 and is_ipv4) and use_ipv6 != is_ipv6:
+        config_ip_format = "ipv6" if use_ipv6 else "ipv4"
+        current_ip_format = "ipv6" if is_ipv6 else "ipv4"
+        msg = (_('The config ip %(iscsi_ip)s format is %(config)s,  actually '
+                 'the ip format is %(current)s')
+               % {"iscsi_ip": iscsi_ip,
+                  "config": config_ip_format,
+                  "current": current_ip_format})
+        LOG.error(msg)
+        raise exception.InvalidInput(reason=msg)
+
+
+def check_iscsi_group_valid(client, manager_groups, use_ipv6):
+    if not manager_groups:
+        return
+
+    _, valid_node_ips = get_valid_iscsi_info(client)
+    for manager_ip in manager_groups:
+        iscsi_ips = manager_ip.strip().split(";")
+        for iscsi_ip in iscsi_ips:
+            _check_iscsi_ip_valid(iscsi_ip.strip(), valid_node_ips, use_ipv6)
+
+
+def format_target_portal(portal):
+    _target_ip = portal.split(":")
+    iscsi_ip = ":".join(_target_ip[:-1])
+    if ipaddress.ip_address(six.text_type(iscsi_ip)).version == 6:
+        target_portal = '[' + iscsi_ip + ']' + ":" + _target_ip[-1]
+    else:
+        target_portal = portal
+
+    return target_portal, iscsi_ip
+
+
+def _get_iscsi_ips(manager_groups):
+    index = random.randint(0, len(manager_groups) - 1)
+    iscsi_group = manager_groups[index]
+    manager_groups.remove(iscsi_group)
+
+    iscsi_ips = iscsi_group.strip().split(";")
+    [iscsi_ips.remove(iscsi_ip) for iscsi_ip in iscsi_ips
+     if not iscsi_ip.strip()]
+
+    LOG.info("Get iscsi ips %s.", iscsi_ips)
+    return iscsi_ips
+
+
+def get_iscsi_info_from_host(client, host_name, valid_iscsi_ips):
+    iscsi_ips, target_ips, target_iqns = [], [], []
+    host_iscsi = client.get_host_iscsi_service(host_name)
+    for iscsi in host_iscsi:
+        iscsi_ips.append(iscsi["iscsi_service_ip"])
+
+    for iscsi_ip in iscsi_ips:
+        if iscsi_ip in valid_iscsi_ips.keys():
+            target_ips.append(valid_iscsi_ips[iscsi_ip]["iscsi_portal"])
+            target_iqns.append(valid_iscsi_ips[iscsi_ip]["iscsi_target_iqn"])
+
+    return target_ips, target_iqns
+
+
+def _get_target_info(iscsi_ips, use_ipv6, valid_iscsi_ips, valid_node_ips):
+    target_ips, target_iqns = [], []
+    for iscsi_ip in iscsi_ips:
+        for node_ip in valid_node_ips.get(iscsi_ip, []):
+            ip_version = ipaddress.ip_address(six.text_type(node_ip)).version
+            if use_ipv6 ^ ip_version == 6:
+                continue
+            target_ips.append(valid_iscsi_ips[node_ip]["iscsi_portal"])
+            target_iqns.append(
+                valid_iscsi_ips[node_ip]["iscsi_target_iqn"])
+
+    return target_ips, target_iqns
+
+
+def get_iscsi_info_from_conf(manager_groups, iscsi_manager_groups, use_ipv6,
+                             valid_iscsi_ips, valid_node_ips):
+    target_ips, target_iqns = [], []
+    manager_group_len = len(manager_groups)
+    for _ in range(manager_group_len):
+        iscsi_ips = _get_iscsi_ips(manager_groups)
+        if not manager_groups:
+            manager_groups.extend(iscsi_manager_groups)
+
+        target_ips, target_iqns = _get_target_info(
+            iscsi_ips, use_ipv6, valid_iscsi_ips, valid_node_ips)
+        if target_ips:
+            break
+
+    return target_ips, target_iqns
