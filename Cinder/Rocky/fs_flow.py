@@ -64,6 +64,9 @@ class DeleteHostWithCheck(task.Task):
         if not is_host_in_group and fs_utils.is_host_add_to_array(
                 self.client, host_name):
             LOG.info("Delete host: %s from the array", host_name)
+            host_iscsi = self.client.get_iscsi_host_relation(host_name)
+            if host_iscsi:
+                self.client.delete_iscsi_host_relation(host_name, host_iscsi)
             self.client.delete_host(host_name)
 
 
@@ -227,11 +230,13 @@ class UnMapLunFromHostTask(task.Task):
 class GetISCSIProperties(task.Task):
     default_provides = 'properties'
 
-    def __init__(self, client, configuration, manager_groups, *args, **kwargs):
+    def __init__(self, client, configuration, manager_groups, thread_lock,
+                 *args, **kwargs):
         super(GetISCSIProperties, self).__init__(*args, **kwargs)
         self.client = client
         self.configuration = configuration
         self.manager_groups = manager_groups
+        self.thread_lock = thread_lock
 
     @staticmethod
     def _construct_properties(multipath, target_lun, target_ips, target_iqns):
@@ -278,10 +283,13 @@ class GetISCSIProperties(task.Task):
 
         iscsi_manager_groups = self.configuration.iscsi_manager_groups
         if not target_ips:
-            target_ips, target_iqns = fs_utils.get_iscsi_info_from_conf(
+            (node_ips, target_ips, target_iqns
+             ) = fs_utils.get_iscsi_info_from_conf(
                 self.manager_groups, iscsi_manager_groups,
                 self.configuration.use_ipv6,
-                valid_iscsi_ips, valid_node_ips)
+                valid_iscsi_ips, valid_node_ips, self.thread_lock)
+            if target_ips:
+                self.client.add_iscsi_host_relation(host_name, node_ips)
 
         if not target_ips:
             msg = (_(
@@ -341,7 +349,7 @@ def get_iscsi_required_params(vol_name, connector, client=None):
 
 
 def initialize_iscsi_connection(client, vol_name, connector, configuration,
-                                manager_groups):
+                                manager_groups, thread_lock):
     (vol_name, host_name, host_group_name, initiator_name,
      multipath) = get_iscsi_required_params(vol_name, connector)
 
@@ -367,7 +375,7 @@ def initialize_iscsi_connection(client, vol_name, connector, configuration,
         )
 
     work_flow.add(
-        GetISCSIProperties(client, configuration, manager_groups)
+        GetISCSIProperties(client, configuration, manager_groups, thread_lock)
     )
 
     engine = taskflow.engines.load(work_flow, store=store_spec)
@@ -382,7 +390,7 @@ def terminate_iscsi_connection(client, vol_name, connector):
     store_spec = {'vol_name': vol_name,
                   'host_name': host_name,
                   'host_group_name': host_group_name}
-    work_flow = linear_flow.Flow('initialize_iscsi_connection')
+    work_flow = linear_flow.Flow('terminate_iscsi_connection')
     if host_name and fs_utils.is_host_add_to_array(client, host_name):
         if fs_utils.is_volume_associate_to_host(client, vol_name, host_name):
             work_flow.add(

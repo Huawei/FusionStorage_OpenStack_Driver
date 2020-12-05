@@ -15,6 +15,7 @@
 
 import json
 
+from multiprocessing import Lock
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import units
@@ -63,10 +64,10 @@ volume_opts = [
                     'is seconds. For example: "scan_device_timeout = 5"'),
     cfg.ListOpt('iscsi_manager_groups',
                 default=[],
-                help='The ips group of FSA node were used to find the target '
+                help='The ip groups of FSA node were used to find the target '
                      'initiator and target ips in ISCSI in order to balance '
                      'business network. For example: '
-                     '"iscsi_manager_groups = "ip1;ip2;ip3", "ip4;ip5;ip6"'),
+                     '"iscsi_manager_groups = ip1;ip2;ip3, ip4;ip5;ip6"'),
     cfg.BoolOpt('use_ipv6',
                 default=False,
                 help='Whether to return target_portal and target_iqn in '
@@ -79,7 +80,7 @@ CONF.register_opts(volume_opts)
 
 @interface.volumedriver
 class DSWAREBaseDriver(driver.VolumeDriver):
-    VERSION = '2.2.RC1'
+    VERSION = '2.2.RC2'
     CI_WIKI_NAME = 'Huawei_FusionStorage_CI'
 
     def __init__(self, *args, **kwargs):
@@ -96,6 +97,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         self.client = None
         self.fs_qos = None
         self.manager_groups = self.configuration.iscsi_manager_groups
+        self.lock = Lock()
 
     @staticmethod
     def get_driver_options():
@@ -129,7 +131,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         backend_name = self.configuration.safe_get(
             'volume_backend_name') or self.__class__.__name__
         data = {"volume_backend_name": backend_name,
-                "driver_version": "2.2.RC1",
+                "driver_version": "2.2.RC2",
                 "thin_provisioning_support": False,
                 "pools": [],
                 "vendor_name": "Huawei"
@@ -635,7 +637,7 @@ class DSWAREDriver(DSWAREBaseDriver):
 
 class DSWAREISCSIDriver(DSWAREBaseDriver):
     def check_for_setup_error(self):
-        DSWAREBaseDriver.check_for_setup_error(self)
+        super(DSWAREISCSIDriver, self).check_for_setup_error()
         fs_utils.check_iscsi_group_valid(
             self.client, self.manager_groups, self.configuration.use_ipv6)
 
@@ -657,7 +659,7 @@ class DSWAREISCSIDriver(DSWAREBaseDriver):
         vol_name = self._get_vol_name(volume)
         properties = fs_flow.initialize_iscsi_connection(
             self.client, vol_name, connector, self.configuration,
-            self.manager_groups)
+            self.manager_groups, self.lock)
 
         LOG.info("Finish initialize iscsi connection, return: %s, the "
                  "remaining manager groups are %s",

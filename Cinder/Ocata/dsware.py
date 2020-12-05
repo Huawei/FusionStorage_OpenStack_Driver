@@ -80,7 +80,7 @@ CONF.register_opts(volume_opts)
 
 @interface.volumedriver
 class DSWAREBaseDriver(driver.VolumeDriver):
-    VERSION = '2.2.RC1'
+    VERSION = '2.2.RC2'
     CI_WIKI_NAME = 'Huawei_FusionStorage_CI'
 
     def __init__(self, *args, **kwargs):
@@ -131,7 +131,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         backend_name = self.configuration.safe_get(
             'volume_backend_name') or self.__class__.__name__
         data = {"volume_backend_name": backend_name,
-                "driver_version": "2.2.RC1",
+                "driver_version": "2.2.RC2",
                 "thin_provisioning_support": False,
                 "pools": [],
                 "vendor_name": "Huawei"
