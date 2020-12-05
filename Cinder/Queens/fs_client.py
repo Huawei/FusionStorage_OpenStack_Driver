@@ -14,15 +14,15 @@
 #    under the License.
 
 import json
-
-from oslo_log import log as logging
 import requests
 import six
+import time
 
 from cinder import exception
 from cinder.i18n import _
 from cinder.volume.drivers.fusionstorage import constants
 
+from oslo_log import log as logging
 LOG = logging.getLogger(__name__)
 
 
@@ -107,7 +107,8 @@ class RestCommon(object):
         req_dict = {"url": call_url, "method": method, "data": data}
         return self._deal_call_result(result, filter_flag, json_flag, req_dict)
 
-    def _assert_rest_result(self, result, err_str):
+    @staticmethod
+    def _assert_rest_result(result, err_str):
         if isinstance(result.get('result'), dict):
             if result['result'].get("code") != 0:
                 msg = (_('%(err)s\nresult: %(res)s.') % {'err': err_str,
@@ -354,16 +355,31 @@ class RestCommon(object):
 
         self.delete_snapshot(snapshot_name=temp_snapshot_name)
 
+    @staticmethod
+    def _is_detail_error(result, detail_error_code):
+        if result.get("result", "") == constants.DSWARE_MULTI_ERROR:
+            for err in result.get("detail", []):
+                if err.get("errorCode") == detail_error_code:
+                    return True
+            return False
+        return True
+
     def create_host(self, host_name):
         url = '/host/create'
         params = {"hostName": host_name}
         result = self.call(url, "POST", params)
+        if self._is_detail_error(result, constants.HOST_ALREADY_EXIST):
+            return None
+
         self._assert_rest_result(result, _('Create host session error.'))
 
     def delete_host(self, host_name):
         url = '/host/delete'
         params = {"hostName": host_name}
         result = self.call(url, "POST", params)
+        if self._is_detail_error(result, constants.HOST_MAPPING_EXIST):
+            return None
+
         self._assert_rest_result(result, _('Delete host session error.'))
 
     def get_all_host(self):
@@ -414,6 +430,8 @@ class RestCommon(object):
         url = '/hostGroup/add'
         params = {"hostGroupName": host_group_name}
         result = self.call(url, "POST", params)
+        if self._is_detail_error(result, constants.HOSTGROUP_ALREADY_EXIST):
+            return None
         self._assert_rest_result(
             result, _("Create HostGroup session error"))
 
@@ -434,6 +452,9 @@ class RestCommon(object):
         url = '/hostGroup/host/add'
         params = {"hostGroupName": host_group_name, "hostList": [host_name]}
         result = self.call(url, "POST", params)
+        if self._is_detail_error(result, constants.HOST_MAPPING_GROUP_EXIST):
+            return None
+
         self._assert_rest_result(
             result, _("Add host to HostGroup session error"))
 
@@ -464,6 +485,8 @@ class RestCommon(object):
         url = 'iscsi/createPort'
         params = {"portName": initiator_name}
         result = self.call(url, "POST", params, get_version=True)
+        if self._is_detail_error(result, constants.INITIATOR_ALREADY_EXIST):
+            return None
         self._assert_rest_result(
             result, _("Add initiator to array session error"))
 
@@ -478,6 +501,11 @@ class RestCommon(object):
         url = '/host/port/add'
         params = {"hostName": host_name, "portNames": [initiator]}
         result = self.call(url, "POST", params)
+        if self._is_detail_error(result, constants.INITIATOR_IN_HOST):
+            associate_host_ini = self.get_associate_initiator_by_host_name(
+                host_name)
+            if initiator in associate_host_ini:
+                return None
         self._assert_rest_result(
             result, _("Add initiator to host session error"))
 
@@ -628,3 +656,59 @@ class RestCommon(object):
         self._assert_rest_result(
             result, _("Get host iscsi service session error."))
         return result.get("data", [])
+
+    def add_iscsi_host_relation(self, host_name, ip_list):
+        if not ip_list:
+            return
+        url = "/dsware/service/iscsi/addIscsiHostRelation"
+        ip_strings = ";".join(ip_list)
+        params = [{"content": ip_strings, "key": host_name, "flag": 0}]
+        try:
+            result = self.call(url, "POST", params, get_system_time=True)
+            if result.get("errorCode") == constants.HOST_ISCSI_RELATION_EXIST:
+                result = self.get_iscsi_host_relation(host_name)
+                if result:
+                    return None
+            self._assert_rest_result(
+                result, _("Add iscsi host relation session error."))
+        except Exception as err:
+            if constants.URL_NOT_FOUND in six.text_type(err):
+                return None
+            else:
+                raise
+
+    def get_iscsi_host_relation(self, host_name):
+        iscsi_ips = []
+        url = "/dsware/service/iscsi/queryIscsiHostRelation"
+        params = [{"key": host_name, "flag": 0}]
+        try:
+            result = self.call(url, "POST", params, get_system_time=True)
+            self._assert_rest_result(
+                result, _("Get iscsi host relation session error."))
+
+            for iscsi in result.get("hostList", []):
+                if int(iscsi.get("flag")) == constants.HOST_FLAG:
+                    iscsi_ips = iscsi.get("content", "").split(";")
+            return iscsi_ips
+        except Exception as err:
+            if constants.URL_NOT_FOUND in six.text_type(err):
+                return iscsi_ips
+            else:
+                raise
+
+    def delete_iscsi_host_relation(self, host_name, ip_list):
+        if not ip_list:
+            return
+
+        url = "/dsware/service/iscsi/deleteIscsiHostRelation"
+        ip_strings = ";".join(ip_list)
+        params = [{"content": ip_strings, "key": host_name, "flag": 0}]
+        try:
+            result = self.call(url, "POST", params, get_system_time=True)
+            self._assert_rest_result(
+                result, _("Delete iscsi host relation session error."))
+        except Exception as err:
+            if constants.URL_NOT_FOUND in six.text_type(err):
+                return None
+            else:
+                raise
