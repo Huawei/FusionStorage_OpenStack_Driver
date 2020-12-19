@@ -995,13 +995,7 @@ class DSWAREDriver(driver.VolumeDriver):
             LOG.debug("not openstack qos: %s did not delete it", str(vol_qos))
             self._dsware_disasso_qos(vol_qos['qos_name'], volume_name)
 
-        # delete volume
-        # check quick start
-        if self._check_quick_start(volume.get('id')):
-            LOG.debug("[DSW-DRIVER] start deleting linked_clone volume ")
-            return self._quick_delete_volume(volume)
-        else:
-            return self._delete_volume(volume_name)
+        return self._delete_volume(volume_name)
 
     def _get_snapshot(self, snapshot_name):
         snapshot_info = self.dsware_client.query_snap(snapshot_name)

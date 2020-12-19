@@ -373,7 +373,7 @@ class FSPythonApi(object):
 
     def create_linked_clone_volume(self, vol_name,
                                    vol_size, src_vol_name):
-        tmp_snap_name = str(src_vol_name) + '_linked_clone_snap'
+        tmp_snap_name = str(src_vol_name) + str(vol_name)
 
         ret_code = self.create_snapshot(tmp_snap_name, src_vol_name, 0)
         if 0 != ret_code:
