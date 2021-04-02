@@ -720,7 +720,7 @@ def _get_target_info(manager_ips, use_ipv6, valid_iscsi_ips, valid_node_ips):
     for manager_ip in manager_ips:
         for node_ip in valid_node_ips.get(manager_ip, []):
             ip_version = ipaddress.ip_address(six.text_type(node_ip)).version
-            if use_ipv6 ^ ip_version == 6:
+            if use_ipv6 ^ (ip_version == 6):
                 continue
             node_ips.append(node_ip)
             target_ips.append(valid_iscsi_ips[node_ip]["iscsi_portal"])
