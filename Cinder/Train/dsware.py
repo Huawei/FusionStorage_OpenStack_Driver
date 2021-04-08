@@ -80,7 +80,7 @@ CONF.register_opts(volume_opts)
 
 @interface.volumedriver
 class DSWAREBaseDriver(driver.VolumeDriver):
-    VERSION = '2.2.RC2'
+    VERSION = '2.2.RC4'
     CI_WIKI_NAME = 'Huawei_FusionStorage_CI'
 
     def __init__(self, *args, **kwargs):
@@ -131,7 +131,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         backend_name = self.configuration.safe_get(
             'volume_backend_name') or self.__class__.__name__
         data = {"volume_backend_name": backend_name,
-                "driver_version": "2.2.RC2",
+                "driver_version": "2.2.RC4",
                 "thin_provisioning_support": False,
                 "pools": [],
                 "vendor_name": "Huawei"
@@ -181,30 +181,53 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         if result:
             return result
 
-    def _raise_exception(self, msg):
+    @staticmethod
+    def _raise_exception(msg):
         LOG.error(msg)
         raise exception.VolumeBackendAPIException(data=msg)
 
     def _get_pool_id(self, volume):
-        pool_id = None
+        pool_id_list = []
         pool_name = volume_utils.extract_host(volume.host, level='pool')
         all_pools = self.client.query_pool_info()
         for pool in all_pools:
             if pool_name == pool['poolName']:
-                pool_id = pool['poolId']
+                pool_id_list.append(pool['poolId'])
+            if pool_name.isdigit() and int(pool_name) == int(pool['poolId']):
+                pool_id_list.append(pool['poolId'])
 
-        if pool_id is None:
+        if not pool_id_list:
             msg = _('Storage pool %(pool)s does not exist on the array. '
-                    'Please check.') % {"pool": pool_id}
+                    'Please check.') % {"pool": pool_id_list}
             LOG.error(msg)
             raise exception.InvalidInput(reason=msg)
-        return pool_id
 
-    def _get_vol_name(self, volume):
+        # Prevent the name and id from being the same sign
+        if len(pool_id_list) > 1:
+            msg = _('Storage pool tag %(pool)s exists in multiple storage '
+                    'pools %(pool_list). Please check.'
+                    ) % {"pool": pool_name, "pool_list": pool_id_list}
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        return pool_id_list[0]
+
+    @staticmethod
+    def _get_vol_name(volume):
+        vol_name = ""
         provider_location = volume.get("provider_location", None)
+
         if provider_location:
-            vol_name = json.loads(provider_location).get("name")
-        else:
+            try:
+                provider_location = json.loads(provider_location)
+                vol_name = (provider_location.get("name") or
+                            provider_location.get('vol_name'))
+            except Exception as err:
+                LOG.warning("Get volume provider_location %(loc)s error. "
+                            "Reason: %(err)s",
+                            {"loc": provider_location, "err": err})
+
+        if not vol_name:
             vol_name = volume.name
         return vol_name
 
@@ -251,10 +274,19 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         return result if result else None
 
     def _get_snapshot_name(self, snapshot):
+        snapshot_name = ""
         provider_location = snapshot.get("provider_location", None)
         if provider_location:
-            snapshot_name = json.loads(provider_location).get("name")
-        else:
+            try:
+                provider_location = json.loads(provider_location)
+                snapshot_name = (provider_location.get("name") or
+                                 provider_location.get('snap_name'))
+            except Exception as err:
+                LOG.warning("Get snapshot provider_location %(loc)s error. "
+                            "Reason: %(err)s",
+                            {"loc": provider_location, "err": err})
+
+        if not snapshot_name:
             snapshot_name = snapshot.name
         return snapshot_name
 
