@@ -284,7 +284,7 @@ class RestCommon(object):
         return result
 
     def detach_volume(self, vol_name, manage_ip):
-        url = '/volume/detach/'
+        url = '/volume/detach'
         params = {"volName": [vol_name], "ipList": [manage_ip]}
         result = self.call(url, "POST", params)
         self._assert_rest_result(result, _('Detach volume session error.'))
@@ -323,13 +323,13 @@ class RestCommon(object):
         return None
 
     def create_snapshot(self, snapshot_name, vol_name):
-        url = '/snapshot/create/'
+        url = '/snapshot/create'
         params = {"volName": vol_name, "snapshotName": snapshot_name}
         result = self.call(url, "POST", params)
         self._assert_rest_result(result, _('Create snapshot error.'))
 
     def delete_snapshot(self, snapshot_name):
-        url = '/snapshot/delete/'
+        url = '/snapshot/delete'
         params = {"snapshotName": snapshot_name}
         result = self.call(url, "POST", params)
         if result.get('errorCode') in constants.SNAPSHOT_NOT_EXIST:
@@ -337,7 +337,7 @@ class RestCommon(object):
         self._assert_rest_result(result, _('Delete snapshot session error.'))
 
     def create_volume_from_snapshot(self, snapshot_name, vol_name, vol_size):
-        url = '/snapshot/volume/create/'
+        url = '/snapshot/volume/create'
         params = {"src": snapshot_name, "volName": vol_name,
                   "volSize": vol_size}
         result = self.call(url, "POST", params)
