@@ -599,15 +599,15 @@ class DSWAREDriver(driver.VolumeDriver):
             full_clone = '1'
 
         if full_clone == '0':
-            self._create_volume_from_snap(dsware_volume_name, volume_size,
-                                          snapshot_name)
+            create_volume_info = self._create_volume_from_snap(
+                dsware_volume_name, volume_size, snapshot_name)
         else:
             is_thin = self.configuration.dsware_isthin
-            self._create_volume(dsware_volume_name, volume_size,
-                                is_thin, volume['host'],
-                                meta_data.get('__system__encrypted'),
-                                meta_data.get('__system__cmkid'),
-                                volume._context.auth_token)
+            create_volume_info = self._create_volume(
+                dsware_volume_name, volume_size, is_thin, volume['host'],
+                meta_data.get('__system__encrypted'),
+                meta_data.get('__system__cmkid'),
+                volume._context.auth_token)
             self._create_fullvol_from_snap(dsware_volume_name,
                                            snapshot_name)
             ret = self._wait_for_create_cloned_volume_finish_timer(
@@ -620,6 +620,7 @@ class DSWAREDriver(driver.VolumeDriver):
         replication_driver_data = {'ip': dsw_manager_ip,
                                    'pool': pool_id,
                                    'vol_name': dsware_volume_name}
+        meta_data['lun_wwn'] = create_volume_info.get('wwn')
         volume_info = {
             "metadata": meta_data,
             "provider_location": json.dumps(provider_location),
@@ -772,7 +773,7 @@ class DSWAREDriver(driver.VolumeDriver):
         replication_driver_data = {'ip': dsw_manager_ip,
                                    'pool': pool_id,
                                    'vol_name': dsware_volume_name}
-
+        meta_data['lun_wwn'] = create_volume_info.get('wwn')
         volume_info = {
             "metadata": meta_data,
             "provider_location": json.dumps(provider_location),
@@ -2240,6 +2241,8 @@ class DSWAREDriver(driver.VolumeDriver):
                     msg = _('quickstart volume create failed')
                     raise exception.VolumeBackendAPIException(data=msg)
 
+            meta_data = {'lun_name': dsware_volume_name,
+                         'lun_wwn': result.get('wwn')}
             provider_location = {'offset': 0,
                                  'storage_type': 'FusionStorage',
                                  'ip': self.dsware_client.get_manage_ip(),
@@ -2254,6 +2257,7 @@ class DSWAREDriver(driver.VolumeDriver):
                                                            volume['id'],
                                                            volume_image_meta)
             return {
+                "metadata": meta_data,
                 "provider_location": json.dumps(provider_location),
             }
 
@@ -2485,7 +2489,7 @@ class DSWAREDriver(driver.VolumeDriver):
              Result:%(qos)d, ") % {'qos': qos['result']})
             raise exception.VolumeBackendAPIException(data=msg)
 
-        dsware_volume_name = self._construct_dsware_volume_name(volume)
+        dsware_volume_name = self._get_dsware_volume_name(volume)
         result = self.dsware_client.associate_qos_with_volume(
             qos['qos_name'], dsware_volume_name)
         if result != 0:
@@ -2521,7 +2525,7 @@ class DSWAREDriver(driver.VolumeDriver):
         """
         LOG.info(_LI("DSWARE _check_and_disasso_qos"))
         vol_qos = self.query_volume_qos(volume)
-        volume_name = self._construct_dsware_volume_name(volume)
+        volume_name = self._get_dsware_volume_name(volume)
         if vol_qos['result'] != 0:
             msg = _("DSWARE Disassociate Qos with volume %(volume)s Query Qos"
                     " failed! Result:%(vol_qos)s") % {
@@ -2800,7 +2804,7 @@ class DSWAREDriver(driver.VolumeDriver):
             LOG.info(_LI('_create_qos_for_volume: not support'))
             return qos_info
 
-        volume_name = self._construct_dsware_volume_name(volume)
+        volume_name = self._get_dsware_volume_name(volume)
         qos_info['qos_name'] = self._generate_qos_name(volume_name)
 
         LOG.info(_LI('dsware create qos: %s'), str(qos_info))
@@ -2938,7 +2942,7 @@ class DSWAREDriver(driver.VolumeDriver):
 
     def disassociate_qos_with_volume(self, qos_id, volume):
         vol_qos = self.query_volume_qos(volume)
-        volume_name = self._construct_dsware_volume_name(volume)
+        volume_name = self._get_dsware_volume_name(volume)
         if vol_qos['result'] != 0:
             msg = _("DSWARE Disassociate Qos with volume %(volume)s Query Qos "
                     "failed! Result:%(vol_qos)s") % {'volume': volume_name,
