@@ -71,7 +71,11 @@ volume_opts = [
     cfg.BoolOpt('use_ipv6',
                 default=False,
                 help='Whether to return target_portal and target_iqn in '
-                     'IPV6 format')
+                     'IPV6 format'),
+    cfg.BoolOpt('force_delete_volume',
+                default=False,
+                help='When deleting a LUN, if the LUN is in the mapping view,'
+                     ' whether to delete it forcibly')
 ]
 
 CONF = cfg.CONF
@@ -80,7 +84,7 @@ CONF.register_opts(volume_opts)
 
 @interface.volumedriver
 class DSWAREBaseDriver(driver.VolumeDriver):
-    VERSION = '2.2.RC4'
+    VERSION = '2.3.RC1'
     CI_WIKI_NAME = 'Huawei_FusionStorage_CI'
 
     def __init__(self, *args, **kwargs):
@@ -131,8 +135,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         backend_name = self.configuration.safe_get(
             'volume_backend_name') or self.__class__.__name__
         data = {"volume_backend_name": backend_name,
-                "driver_version": "2.2.RC4",
-                "thin_provisioning_support": False,
+                "driver_version": "2.3.RC1",
                 "pools": [],
                 "vendor_name": "Huawei"
                 }
@@ -167,6 +170,9 @@ class DSWAREBaseDriver(driver.VolumeDriver):
             "provisioned_capacity_gb": capacity['provisioned_capacity_gb'],
             "QoS_support": True,
             'multiattach': True,
+            "thin_provisioning_support": True,
+            'max_over_subscription_ratio':
+                self.configuration.max_over_subscription_ratio,
         })
         return status
 
@@ -180,6 +186,19 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         result = self.client.query_volume_by_name(vol_name=vol_name)
         if result:
             return result
+
+    def _check_volume_mapped(self, vol_name):
+        host_list = self.client.get_host_by_volume(vol_name)
+        if ((len(host_list) > 1 and self.conf.force_delete_volume) or
+                len(host_list) == 1):
+            msg = ('Volume %s has been mapped to host.'
+                   ' Now force to delete it') % vol_name
+            LOG.warning(msg)
+            for host in host_list:
+                self.client.unmap_volume_from_host(host['hostName'], vol_name)
+        elif len(host_list) > 1 and not self.conf.force_delete_volume:
+            msg = 'Volume %s has been mapped to more than one host' % vol_name
+            self._raise_exception(msg)
 
     @staticmethod
     def _raise_exception(msg):
@@ -249,10 +268,13 @@ class DSWAREBaseDriver(driver.VolumeDriver):
             pool_id=pool_id, vol_name=vol_name, vol_size=vol_size)
 
         self._add_qos_to_volume(volume, vol_name)
+        result = self.client.query_volume_by_name(vol_name=vol_name)
+        return {"metadata": {'lun_wwn': result.get('wwn')}} if result else {}
 
     def delete_volume(self, volume):
         vol_name = self._get_vol_name(volume)
         if self._check_volume_exist(volume):
+            self._check_volume_mapped(vol_name)
             self.fs_qos.remove(vol_name)
             self.client.delete_volume(vol_name=vol_name)
 
@@ -320,6 +342,9 @@ class DSWAREBaseDriver(driver.VolumeDriver):
                 vol_size=vol_size)
             self._add_qos_to_volume(volume, vol_name)
             self._expand_volume_when_create(vol_name, vol_size)
+            result = self.client.query_volume_by_name(vol_name=vol_name)
+            return ({"metadata": {'lun_wwn': result.get('wwn')}}
+                    if result else {})
 
     def create_cloned_volume(self, volume, src_volume):
         vol_name = self._get_vol_name(volume)
@@ -338,6 +363,9 @@ class DSWAREBaseDriver(driver.VolumeDriver):
                 src_vol_name=src_vol_name)
             self._add_qos_to_volume(volume, vol_name)
             self._expand_volume_when_create(vol_name, vol_size)
+            result = self.client.query_volume_by_name(vol_name=vol_name)
+            return ({"metadata": {'lun_wwn': result.get('wwn')}}
+                    if result else {})
 
     def create_snapshot(self, snapshot):
         snapshot_name = self._get_snapshot_name(snapshot)
@@ -439,9 +467,10 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         change_opts = self._check_need_changes_for_manage(volume, vol_name)
         self._change_lun(vol_name, change_opts.get("new_opts"),
                          change_opts.get("old_opts"))
-
+        meta_data = {'lun_wwn': vol_info.get('wwn')}
         provider_location = {"name": vol_name}
-        return {'provider_location': json.dumps(provider_location)}
+        return {"metadata": meta_data,
+                'provider_location': json.dumps(provider_location)}
 
     def manage_existing_get_size(self, volume, existing_ref):
         pool = self._get_pool_id(volume)
