@@ -302,14 +302,43 @@ class GetISCSIProperties(task.Task):
                  % (target_ips, target_iqns))
         return target_ips, target_iqns
 
+    def _find_iscsi_ips_from_storage(self, host_name):
+        valid_iscsi_ips, valid_node_ips = fs_utils.get_valid_iscsi_info(
+            self.client)
+        target_ips, target_iqns = fs_utils.get_iscsi_info_from_host(
+            self.client, host_name, valid_iscsi_ips)
+
+        if not target_ips:
+            iscsi_links = self.client.get_iscsi_links_info(
+                self.configuration.iscsi_link_count,
+                self.configuration.pools_name)
+            (node_ips, target_ips, target_iqns
+             ) = fs_utils.get_iscsi_info_from_storage(
+                iscsi_links, self.configuration.use_ipv6,
+                valid_iscsi_ips, valid_node_ips)
+            if target_ips:
+                self.client.add_iscsi_host_relation(host_name, node_ips)
+
+        if not target_ips:
+            msg = _("Can not find a valid target ip")
+            LOG.warning(msg)
+            raise exception.InvalidInput(msg)
+
+        LOG.info("Get iscsi target info, target ips: %s, target iqns: %s",
+                 target_ips, target_iqns)
+        return target_ips, target_iqns
+
     def execute(self, host_name, vol_name, multipath):
         LOG.info("Get ISCSI initialize connection properties.")
         target_lun = fs_utils.get_target_lun(self.client, host_name, vol_name)
 
         if self.configuration.iscsi_manager_groups:
             target_ips, target_iqns = self._find_iscsi_ips(host_name)
-        else:
+        elif self.configuration.target_ips:
             target_ips, target_iqns = self._find_target_ips()
+        else:
+            target_ips, target_iqns = self._find_iscsi_ips_from_storage(
+                host_name)
 
         return self._construct_properties(multipath, target_lun,
                                           target_ips, target_iqns)

@@ -49,7 +49,7 @@ volume_opts = [
     cfg.StrOpt('dsware_storage_pools',
                default="",
                help='The list of pools on the FusionStorage array, the '
-                    'semicolon(;) was used to split the storage pools, '
+                    'semicolon(;) is used to split the storage pools, '
                     '"dsware_storage_pools = xxx1; xxx2; xxx3"'),
     cfg.ListOpt('target_ips',
                 default=[],
@@ -71,7 +71,40 @@ volume_opts = [
     cfg.BoolOpt('use_ipv6',
                 default=False,
                 help='Whether to return target_portal and target_iqn in '
-                     'IPV6 format')
+                     'IPV6 format'),
+    cfg.BoolOpt('force_delete_volume',
+                default=False,
+                help='When deleting a LUN, if the LUN is in the mapping view,'
+                     ' whether to delete it forcibly'),
+    cfg.StrOpt('san_ip',
+               default='',
+               help='The ip address of FusionStorage array. For example, '
+                    '"san_ip=xxx"'),
+    cfg.StrOpt('san_port',
+               default='',
+               help='The port of FusionStorage array. For example, '
+                    '"san_port=xxx"'),
+    cfg.StrOpt('storage_pools',
+               default="",
+               help='The list of pools on the FusionStorage array, the '
+                    'semicolon(;) is used to split the storage pools, '
+                    '"storage_pools = xxx1; xxx2; xxx3"'),
+    cfg.IntOpt('iscsi_link_count',
+               default=4,
+               help='Number of iSCSI links in an iSCSI network. '
+                    'The default value is 4.'),
+    cfg.BoolOpt('storage_ssl_two_way_auth',
+               default=False,
+               help='Whether to use mutual authentication.'),
+    cfg.StrOpt('storage_ca_filepath',
+               default='',
+               help='CA certificate directory.'),
+    cfg.StrOpt('storage_cert_filepath',
+               default='',
+               help='Client certificate directory.'),
+    cfg.StrOpt('storage_key_filepath',
+               default='',
+               help='Client key directory.'),
 ]
 
 CONF = cfg.CONF
@@ -80,7 +113,7 @@ CONF.register_opts(volume_opts)
 
 @interface.volumedriver
 class DSWAREBaseDriver(driver.VolumeDriver):
-    VERSION = '2.3.RC1'
+    VERSION = '2.3.RC3'
     CI_WIKI_NAME = 'Huawei_FusionStorage_CI'
 
     def __init__(self, *args, **kwargs):
@@ -105,13 +138,26 @@ class DSWAREBaseDriver(driver.VolumeDriver):
 
     def do_setup(self, context):
         self.conf.update_config_value()
+        self.conf.check_ssl_two_way_config_valid()
         url_str = self.configuration.san_address
         url_user = self.configuration.san_user
         url_password = self.configuration.san_password
+        mutual_authentication = {
+            "storage_ca_filepath": self.configuration.storage_ca_filepath,
+            "storage_key_filepath": self.configuration.storage_key_filepath,
+            "storage_cert_filepath": self.configuration.storage_cert_filepath,
+            "storage_ssl_two_way_auth":
+                self.configuration.storage_ssl_two_way_auth
+        }
 
-        self.client = fs_client.RestCommon(
-            fs_address=url_str, fs_user=url_user,
-            fs_password=url_password)
+        extend_conf = {
+            "mutual_authentication": mutual_authentication
+        }
+
+        self.client = fs_client.RestCommon(fs_address=url_str,
+                                           fs_user=url_user,
+                                           fs_password=url_password,
+                                           **extend_conf)
         self.client.login()
         self.fs_qos = fs_qos.FusionStorageQoS(self.client)
 
@@ -131,7 +177,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         backend_name = self.configuration.safe_get(
             'volume_backend_name') or self.__class__.__name__
         data = {"volume_backend_name": backend_name,
-                "driver_version": "2.3.RC1",
+                "driver_version": "2.3.RC3",
                 "pools": [],
                 "vendor_name": "Huawei"
                 }
@@ -182,6 +228,19 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         result = self.client.query_volume_by_name(vol_name=vol_name)
         if result:
             return result
+
+    def _check_volume_mapped(self, vol_name):
+        host_list = self.client.get_host_by_volume(vol_name)
+        if ((len(host_list) > 1 and self.conf.force_delete_volume) or
+                len(host_list) == 1):
+            msg = ('Volume %s has been mapped to host.'
+                   ' Now force to delete it') % vol_name
+            LOG.warning(msg)
+            for host in host_list:
+                self.client.unmap_volume_from_host(host['hostName'], vol_name)
+        elif len(host_list) > 1 and not self.conf.force_delete_volume:
+            msg = 'Volume %s has been mapped to more than one host' % vol_name
+            self._raise_exception(msg)
 
     @staticmethod
     def _raise_exception(msg):
@@ -257,6 +316,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
     def delete_volume(self, volume):
         vol_name = self._get_vol_name(volume)
         if self._check_volume_exist(volume):
+            self._check_volume_mapped(vol_name)
             self.fs_qos.remove(vol_name)
             self.client.delete_volume(vol_name=vol_name)
 

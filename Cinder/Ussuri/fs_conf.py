@@ -93,7 +93,14 @@ class FusionStorageConf(object):
 
     def _san_address(self):
         address = self.configuration.safe_get(constants.CONF_ADDRESS)
-        self._assert_text_result(address, mess=constants.CONF_ADDRESS)
+        if not address:
+            san_ip = self.configuration.safe_get(constants.CONF_IP)
+            san_port = self.configuration.safe_get(constants.CONF_PORT)
+            if san_ip and san_port:
+                address = "https://" + san_ip + ":" + san_port
+        mess = (constants.CONF_ADDRESS + ' or ' + constants.CONF_IP + ' or ' +
+                constants.CONF_PORT)
+        self._assert_text_result(address, mess=mess)
         setattr(self.configuration, 'san_address', address)
 
     def _decode_text(self, text):
@@ -114,7 +121,10 @@ class FusionStorageConf(object):
 
     def _pools_name(self):
         pools_name = self.configuration.safe_get(constants.CONF_POOLS)
-        self._assert_text_result(pools_name, mess=constants.CONF_POOLS)
+        if not pools_name:
+            pools_name = self.configuration.safe_get(constants.CONF_NEW_POOLS)
+        mess = constants.CONF_POOLS + ' or ' + constants.CONF_NEW_POOLS
+        self._assert_text_result(pools_name, mess=mess)
         pools = set(x.strip() for x in pools_name.split(';') if x.strip())
         if not pools:
             msg = _('No valid storage pool configured.')
@@ -126,3 +136,14 @@ class FusionStorageConf(object):
         manager_ips = self.configuration.safe_get(constants.CONF_MANAGER_IP)
         self._assert_text_result(manager_ips, mess=constants.CONF_MANAGER_IP)
         setattr(self.configuration, 'manager_ips', manager_ips)
+
+    def check_ssl_two_way_config_valid(self):
+        if not self.configuration.storage_ssl_two_way_auth:
+            return
+
+        self._assert_text_result(self.configuration.storage_cert_filepath,
+                                 mess=constants.CONF_STORAGE_CERT_FILEPATH)
+        self._assert_text_result(self.configuration.storage_ca_filepath,
+                                 mess=constants.CONF_STORAGE_CA_FILEPATH)
+        self._assert_text_result(self.configuration.storage_key_filepath,
+                                 mess=constants.CONF_STORAGE_KEY_FILEPATH)
