@@ -1,4 +1,4 @@
-# 2.3.RC1
+# 2.3.4
 ## Mappings between Cinder Driver and OpenStack versions
 
 | OpenStack |Mitaka|Stein|Train|Ussuri|Victoria|Wallaby|Xena|
