@@ -265,8 +265,8 @@ class RestCommon(object):
         return result.get('lunDetailInfo')
 
     def query_volume_by_id(self, vol_id):
-        url = '/volume/queryById?volId=' + vol_id
-        result = self.call(url, 'GET')
+        url = 'v1.3/volume/queryById?volId=' + vol_id
+        result = self.call(url, 'GET', get_version=True)
         if result.get('errorCode') in constants.VOLUME_NOT_EXIST:
             return None
         self._assert_rest_result(
