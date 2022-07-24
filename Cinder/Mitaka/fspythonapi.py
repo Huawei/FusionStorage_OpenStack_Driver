@@ -582,7 +582,7 @@ class FSPythonApi(object):
             return 1
 
     def snap_info_analyze(self, info):
-        local_snap_info = snap_info
+        local_snap_info = snap_info.copy()
         if not info:
             local_snap_info['result'] = 1
             return local_snap_info
@@ -1017,3 +1017,52 @@ class FSPythonApi(object):
         volume_detach_result['result'] = error_code
         return volume_detach_result
 
+    def _query_snapshot_of_volume(self, vol_name):
+        result = 0
+        snapshot_list = []
+        cmd = '--op querySnapOfVolume' + ' ' + '--volName' + ' ' + vol_name
+
+        exec_result = self.start_execute_cmd(cmd, 1)
+        if exec_result:
+            for line in exec_result:
+                line = line.replace('\n', '')
+                if re.search('^result=', line) and \
+                        not re.search('^result=0', line):
+                    result = int(line[self.res_idx:])
+                    break
+        # 51010014:no snap is created by this volume
+        if 51010014 == result or 0 == result:
+            result = 0
+            snapshot_list = self._get_snapshot_list_from_result(exec_result)
+        return result, snapshot_list
+
+    def _get_snapshot_list_from_result(self, exec_result):
+        snapshot_list = []
+        if not exec_result:
+            return snapshot_list
+
+        for one_line in exec_result:
+            if re.search('^snap_name=', one_line):
+                tmp_snap_info = self.snap_info_analyze(one_line)
+                snapshot_list.append(tmp_snap_info)
+        return snapshot_list
+
+    def _get_snapshot_from_result(self, snapshot_list, snapshot_key,
+                                  snapshot_name):
+        for snapshot_info in snapshot_list:
+            LOG.debug("the snapshot_info %s", snapshot_info.get(snapshot_key))
+            LOG.debug("the snapshot_name %s", snapshot_name)
+            if snapshot_info.get(snapshot_key) == snapshot_name:
+                return snapshot_info
+
+        return {}
+
+    def query_snapshot_of_volume(self, vol_name, snapshot_name):
+        result, snapshot_list = self._query_snapshot_of_volume(vol_name)
+        if result == 0 and snapshot_list:
+            snapshot_info = self._get_snapshot_from_result(
+                snapshot_list, 'snap_name', snapshot_name)
+            if snapshot_info:
+                return snapshot_info
+
+        return {}

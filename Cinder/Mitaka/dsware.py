@@ -2385,6 +2385,86 @@ class DSWAREDriver(driver.VolumeDriver):
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
 
+    def _check_snapshot_match_volume(self, volume, snap_info):
+        vol_name = self._get_dsware_volume_name(volume)
+        snapshot_info = self.dsware_client.query_snapshot_of_volume(
+            vol_name, snap_info.get('snap_name'))
+
+        pool_id = self._get_poolid_from_host(volume['host'])
+        return snapshot_info.get('pool_id') == str(pool_id)
+
+    def _manage_existing_snapshot_build_model_update(self, volume,
+                                                     dsware_snapshot_name):
+        dsw_manager_ip = self.dsware_client.get_manage_ip()
+        pool_id = self._get_poolid_from_host(volume['host'])
+        dsware_volume_name = self._get_dsware_volume_name(volume)
+
+        snap_provider_location = {'offset': 0,
+                                  'storage_type': 'FusionStorage',
+                                  'ip': dsw_manager_ip,
+                                  'pool': pool_id,
+                                  'snap_name': dsware_snapshot_name}
+
+        provider_auth = {'ip': dsw_manager_ip,
+                         'pool': pool_id,
+                         'snap_name': dsware_snapshot_name,
+                         'vol_name': dsware_volume_name,
+                         'storage_type':
+                             snap_provider_location['storage_type']}
+        model_update = {
+            "provider_location": json.dumps(snap_provider_location),
+            "provider_auth": json.dumps(provider_auth)}
+        return model_update
+
+    def _get_snapshot_info_by_ref(self, existing_ref):
+        dsware_snapshot_name = None
+        if existing_ref.get('source-name'):
+            dsware_snapshot_name = existing_ref.get('source-name')
+
+        if not dsware_snapshot_name:
+            msg = _("source-name not exist, please check")
+            raise exception.ManageExistingInvalidReference(
+                existing_ref=existing_ref, reason=msg)
+
+        snap_info = self.dsware_client.query_snap(dsware_snapshot_name)
+        if not snap_info or snap_info['result'] != 0:
+            msg = _("DSWARE Query snapshot failed! Result:%s") % snap_info
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+
+        return snap_info
+
+    def manage_existing_snapshot(self, snapshot, existing_ref):
+        volume = snapshot.volume
+        snap_info = self._get_snapshot_info_by_ref(existing_ref)
+        vol_name = self._get_dsware_volume_name(volume)
+        if not self._check_snapshot_match_volume(volume, snap_info):
+            msg = (_("The specified snapshot does not belong to the given "
+                     "volume: %s.") % vol_name)
+            raise exception.ManageExistingInvalidReference(
+                existing_ref=existing_ref, reason=msg)
+
+        model_update = self._manage_existing_snapshot_build_model_update(
+            volume, snap_info.get('snap_name'))
+        return model_update
+
+    def manage_existing_snapshot_get_size(self, snapshot, existing_ref):
+        snap_info = self._get_snapshot_info_by_ref(existing_ref)
+        remainder = float(snap_info.get('snap_size')) % units.Ki
+        if remainder != 0:
+            msg = _(
+                "The snapshot size must "
+                "be an integer multiple of 1 GB.")
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+        size = int(int(snap_info.get('snap_size')) / units.Ki)
+        return size
+
+    def unmanage_snapshot(self, snapshot):
+        """Unmanage the specified snapshot from Cinder management."""
+        LOG.info(_LI("Unmanage snapshot: %s."), snapshot['id'])
+        return
+
     def get_pools(self, context, filters=None):
         return self.get_volume_stats(refresh=True)
 
