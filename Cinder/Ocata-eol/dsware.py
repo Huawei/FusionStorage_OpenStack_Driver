@@ -49,7 +49,7 @@ volume_opts = [
     cfg.StrOpt('dsware_storage_pools',
                default="",
                help='The list of pools on the FusionStorage array, the '
-                    'semicolon(;) was used to split the storage pools, '
+                    'semicolon(;) is used to split the storage pools, '
                     '"dsware_storage_pools = xxx1; xxx2; xxx3"'),
     cfg.ListOpt('target_ips',
                 default=[],
@@ -71,7 +71,36 @@ volume_opts = [
     cfg.BoolOpt('use_ipv6',
                 default=False,
                 help='Whether to return target_portal and target_iqn in '
-                     'IPV6 format')
+                     'IPV6 format'),
+    cfg.BoolOpt('force_delete_volume',
+                default=False,
+                help='When deleting a LUN, if the LUN is in the mapping view,'
+                     ' whether to delete it forcibly'),
+    cfg.StrOpt('san_port',
+               default='',
+               help='The port of FusionStorage array. For example, '
+                    '"san_port=xxx"'),
+    cfg.StrOpt('storage_pools',
+               default="",
+               help='The list of pools on the FusionStorage array, the '
+                    'semicolon(;) is used to split the storage pools, '
+                    '"storage_pools = xxx1; xxx2; xxx3"'),
+    cfg.IntOpt('iscsi_link_count',
+               default=4,
+               help='Number of iSCSI links in an iSCSI network. '
+                    'The default value is 4.'),
+    cfg.BoolOpt('storage_ssl_two_way_auth',
+               default=False,
+               help='Whether to use mutual authentication.'),
+    cfg.StrOpt('storage_ca_filepath',
+               default='',
+               help='CA certificate directory.'),
+    cfg.StrOpt('storage_cert_filepath',
+               default='',
+               help='Client certificate directory.'),
+    cfg.StrOpt('storage_key_filepath',
+               default='',
+               help='Client key directory.'),
 ]
 
 CONF = cfg.CONF
@@ -80,7 +109,7 @@ CONF.register_opts(volume_opts)
 
 @interface.volumedriver
 class DSWAREBaseDriver(driver.VolumeDriver):
-    VERSION = '2.2.RC2'
+    VERSION = '2.5.RC1'
     CI_WIKI_NAME = 'Huawei_FusionStorage_CI'
 
     def __init__(self, *args, **kwargs):
@@ -105,13 +134,26 @@ class DSWAREBaseDriver(driver.VolumeDriver):
 
     def do_setup(self, context):
         self.conf.update_config_value()
+        self.conf.check_ssl_two_way_config_valid()
         url_str = self.configuration.san_address
         url_user = self.configuration.san_user
         url_password = self.configuration.san_password
+        mutual_authentication = {
+            "storage_ca_filepath": self.configuration.storage_ca_filepath,
+            "storage_key_filepath": self.configuration.storage_key_filepath,
+            "storage_cert_filepath": self.configuration.storage_cert_filepath,
+            "storage_ssl_two_way_auth":
+                self.configuration.storage_ssl_two_way_auth
+        }
 
-        self.client = fs_client.RestCommon(
-            fs_address=url_str, fs_user=url_user,
-            fs_password=url_password)
+        extend_conf = {
+            "mutual_authentication": mutual_authentication
+        }
+
+        self.client = fs_client.RestCommon(fs_address=url_str,
+                                           fs_user=url_user,
+                                           fs_password=url_password,
+                                           **extend_conf)
         self.client.login()
         self.fs_qos = fs_qos.FusionStorageQoS(self.client)
 
@@ -131,8 +173,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         backend_name = self.configuration.safe_get(
             'volume_backend_name') or self.__class__.__name__
         data = {"volume_backend_name": backend_name,
-                "driver_version": "2.2.RC2",
-                "thin_provisioning_support": False,
+                "driver_version": self.VERSION,
                 "pools": [],
                 "vendor_name": "Huawei"
                 }
@@ -167,6 +208,9 @@ class DSWAREBaseDriver(driver.VolumeDriver):
             "provisioned_capacity_gb": capacity['provisioned_capacity_gb'],
             "QoS_support": True,
             'multiattach': True,
+            "thin_provisioning_support": True,
+            'max_over_subscription_ratio':
+                self.configuration.max_over_subscription_ratio,
         })
         return status
 
@@ -181,30 +225,66 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         if result:
             return result
 
-    def _raise_exception(self, msg):
+    def _check_volume_mapped(self, vol_name):
+        host_list = self.client.get_host_by_volume(vol_name)
+        if ((len(host_list) > 1 and self.conf.force_delete_volume) or
+                len(host_list) == 1):
+            msg = ('Volume %s has been mapped to host.'
+                   ' Now force to delete it') % vol_name
+            LOG.warning(msg)
+            for host in host_list:
+                self.client.unmap_volume_from_host(host['hostName'], vol_name)
+        elif len(host_list) > 1 and not self.conf.force_delete_volume:
+            msg = 'Volume %s has been mapped to more than one host' % vol_name
+            self._raise_exception(msg)
+
+    @staticmethod
+    def _raise_exception(msg):
         LOG.error(msg)
         raise exception.VolumeBackendAPIException(data=msg)
 
     def _get_pool_id(self, volume):
-        pool_id = None
+        pool_id_list = []
         pool_name = volume_utils.extract_host(volume.host, level='pool')
         all_pools = self.client.query_pool_info()
         for pool in all_pools:
             if pool_name == pool['poolName']:
-                pool_id = pool['poolId']
+                pool_id_list.append(pool['poolId'])
+            if pool_name.isdigit() and int(pool_name) == int(pool['poolId']):
+                pool_id_list.append(pool['poolId'])
 
-        if pool_id is None:
+        if not pool_id_list:
             msg = _('Storage pool %(pool)s does not exist on the array. '
-                    'Please check.') % {"pool": pool_id}
+                    'Please check.') % {"pool": pool_id_list}
             LOG.error(msg)
             raise exception.InvalidInput(reason=msg)
-        return pool_id
 
-    def _get_vol_name(self, volume):
+        # Prevent the name and id from being the same sign
+        if len(pool_id_list) > 1:
+            msg = _('Storage pool tag %(pool)s exists in multiple storage '
+                    'pools %(pool_list). Please check.'
+                    ) % {"pool": pool_name, "pool_list": pool_id_list}
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        return pool_id_list[0]
+
+    @staticmethod
+    def _get_vol_name(volume):
+        vol_name = ""
         provider_location = volume.get("provider_location", None)
+
         if provider_location:
-            vol_name = json.loads(provider_location).get("name")
-        else:
+            try:
+                provider_location = json.loads(provider_location)
+                vol_name = (provider_location.get("name") or
+                            provider_location.get('vol_name'))
+            except Exception as err:
+                LOG.warning("Get volume provider_location %(loc)s error. "
+                            "Reason: %(err)s",
+                            {"loc": provider_location, "err": err})
+
+        if not vol_name:
             vol_name = volume.name
         return vol_name
 
@@ -226,10 +306,13 @@ class DSWAREBaseDriver(driver.VolumeDriver):
             pool_id=pool_id, vol_name=vol_name, vol_size=vol_size)
 
         self._add_qos_to_volume(volume, vol_name)
+        result = self.client.query_volume_by_name(vol_name=vol_name)
+        return {"metadata": {'lun_wwn': result.get('wwn')}} if result else {}
 
     def delete_volume(self, volume):
         vol_name = self._get_vol_name(volume)
         if self._check_volume_exist(volume):
+            self._check_volume_mapped(vol_name)
             self.fs_qos.remove(vol_name)
             self.client.delete_volume(vol_name=vol_name)
 
@@ -251,10 +334,19 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         return result if result else None
 
     def _get_snapshot_name(self, snapshot):
+        snapshot_name = ""
         provider_location = snapshot.get("provider_location", None)
         if provider_location:
-            snapshot_name = json.loads(provider_location).get("name")
-        else:
+            try:
+                provider_location = json.loads(provider_location)
+                snapshot_name = (provider_location.get("name") or
+                                 provider_location.get('snap_name'))
+            except Exception as err:
+                LOG.warning("Get snapshot provider_location %(loc)s error. "
+                            "Reason: %(err)s",
+                            {"loc": provider_location, "err": err})
+
+        if not snapshot_name:
             snapshot_name = snapshot.name
         return snapshot_name
 
@@ -288,6 +380,9 @@ class DSWAREBaseDriver(driver.VolumeDriver):
                 vol_size=vol_size)
             self._add_qos_to_volume(volume, vol_name)
             self._expand_volume_when_create(vol_name, vol_size)
+            result = self.client.query_volume_by_name(vol_name=vol_name)
+            return ({"metadata": {'lun_wwn': result.get('wwn')}}
+                    if result else {})
 
     def create_cloned_volume(self, volume, src_volume):
         vol_name = self._get_vol_name(volume)
@@ -306,6 +401,9 @@ class DSWAREBaseDriver(driver.VolumeDriver):
                 src_vol_name=src_vol_name)
             self._add_qos_to_volume(volume, vol_name)
             self._expand_volume_when_create(vol_name, vol_size)
+            result = self.client.query_volume_by_name(vol_name=vol_name)
+            return ({"metadata": {'lun_wwn': result.get('wwn')}}
+                    if result else {})
 
     def create_snapshot(self, snapshot):
         snapshot_name = self._get_snapshot_name(snapshot)
@@ -407,9 +505,10 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         change_opts = self._check_need_changes_for_manage(volume, vol_name)
         self._change_lun(vol_name, change_opts.get("new_opts"),
                          change_opts.get("old_opts"))
-
+        meta_data = {'lun_wwn': vol_info.get('wwn')}
         provider_location = {"name": vol_name}
-        return {'provider_location': json.dumps(provider_location)}
+        return {"metadata": meta_data,
+                'provider_location': json.dumps(provider_location)}
 
     def manage_existing_get_size(self, volume, existing_ref):
         pool = self._get_pool_id(volume)
@@ -628,6 +727,13 @@ class DSWAREDriver(DSWAREBaseDriver):
                 'data': properties}
 
     def terminate_connection(self, volume, connector, **kwargs):
+        attachments = volume.volume_attachment
+        if volume.multiattach and len(attachments) > 1 and sum(
+                1 for a in attachments if a.connector == connector) > 1:
+            LOG.info("Volume is multi-attach and attached to the same host"
+                     " multiple times")
+            return
+
         if self._check_volume_exist(volume):
             manager_ip = self._get_manager_ip(connector)
             vol_name = self._get_vol_name(volume)
@@ -673,6 +779,13 @@ class DSWAREISCSIDriver(DSWAREBaseDriver):
         def _terminate_connection_locked(host):
             LOG.info("Start to terminate iscsi connection, volume: %(vol)s, "
                      "connector: %(con)s", {"vol": volume, "con": connector})
+            attachments = volume.volume_attachment
+            if volume.multiattach and len(attachments) > 1 and sum(
+                    1 for a in attachments if a.connector == connector) > 1:
+                LOG.info("Volume is multi-attach and attached to the same host"
+                         " multiple times")
+                return
+
             if not self._check_volume_exist(volume):
                 LOG.info("Terminate_connection, volume %(vol)s is not exist "
                          "on the array ", {"vol": volume})

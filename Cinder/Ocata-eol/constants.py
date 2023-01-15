@@ -25,7 +25,7 @@ GET_QOS_PAGE_SIZE = 100
 CONNECT_ERROR = 403
 ERROR_UNAUTHORIZED = 10000003
 ERROR_USER_OFFLINE = '1077949069'
-VOLUME_NOT_EXIST = (31000000, 50150005)
+VOLUME_NOT_EXIST = (31000000, 50150005, 32150005)
 SNAPSHOT_NOT_EXIST = (50150006,)
 
 BASIC_URI = '/dsware/service/'
@@ -37,6 +37,13 @@ CONF_MANAGER_IP = "manager_ips"
 CONF_POOLS = "dsware_storage_pools"
 CONF_PWD = "san_password"
 CONF_USER = "san_login"
+CONF_IP = "san_ip"
+CONF_PORT = "san_port"
+CONF_NEW_POOLS = "storage_pools"
+CONF_STORAGE_CA_FILEPATH = "storage_ca_filepath"
+CONF_STORAGE_KEY_FILEPATH = "storage_key_filepath"
+CONF_STORAGE_CERT_FILEPATH = "storage_cert_filepath"
+CONF_STORAGE_SSL_TWO_WAY_AUTH = "storage_ssl_two_way_auth"
 
 QOS_MUST_SET = ["maxIOPS", "maxMBPS"]
 QOS_KEYS = ["maxIOPS", "maxMBPS", "total_iops_sec", "total_bytes_sec"]
