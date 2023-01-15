@@ -752,3 +752,9 @@ def get_iscsi_info_from_conf(manager_groups, iscsi_manager_groups, use_ipv6,
             break
 
     return node_ips, target_ips, target_iqns
+
+
+def get_iscsi_info_from_storage(manager_ips, use_ipv6, valid_iscsi_ips,
+                                valid_node_ips):
+    return _get_target_info(manager_ips, use_ipv6, valid_iscsi_ips,
+                            valid_node_ips)

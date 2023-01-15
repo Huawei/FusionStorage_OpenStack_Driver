@@ -17,6 +17,7 @@ import json
 import requests
 import six
 import time
+from requests.adapters import HTTPAdapter
 
 from cinder import exception
 from cinder.i18n import _
@@ -26,8 +27,15 @@ from oslo_log import log as logging
 LOG = logging.getLogger(__name__)
 
 
+class HostNameIgnoringAdapter(HTTPAdapter):
+    def cert_verify(self, conn, url, verify, cert):
+        conn.assert_hostname = False
+        return super(HostNameIgnoringAdapter, self).cert_verify(
+            conn, url, verify, cert)
+
+
 class RestCommon(object):
-    def __init__(self, fs_address, fs_user, fs_password):
+    def __init__(self, fs_address, fs_user, fs_password, **extend_conf):
         self.address = fs_address
         self.user = fs_user
         self.password = fs_password
@@ -35,8 +43,8 @@ class RestCommon(object):
         self.session = None
         self.token = None
         self.version = None
-
-        self.init_http_head()
+        mutual_authentication = extend_conf.get("mutual_authentication")
+        self.init_http_head(mutual_authentication)
 
         LOG.warning("Suppressing requests library SSL Warnings")
         requests.packages.urllib3.disable_warnings(
@@ -44,12 +52,20 @@ class RestCommon(object):
         requests.packages.urllib3.disable_warnings(
             requests.packages.urllib3.exceptions.InsecurePlatformWarning)
 
-    def init_http_head(self):
+    def init_http_head(self, mutual_authentication=None):
         self.session = requests.Session()
         self.session.headers.update({
             "Content-Type": "application/json;charset=UTF-8",
         })
         self.session.verify = False
+        self.session.mount(self.address, HostNameIgnoringAdapter())
+
+        if mutual_authentication.get("storage_ssl_two_way_auth"):
+            self.session.verify = \
+                mutual_authentication.get("storage_ca_filepath")
+            self.session.cert = \
+                (mutual_authentication.get("storage_cert_filepath"),
+                 mutual_authentication.get("storage_key_filepath"))
 
     def _construct_url(self, url, get_version, get_system_time):
         if get_system_time:
@@ -249,8 +265,8 @@ class RestCommon(object):
         return result.get('lunDetailInfo')
 
     def query_volume_by_id(self, vol_id):
-        url = '/volume/queryById?volId=' + vol_id
-        result = self.call(url, 'GET')
+        url = 'v1.3/volume/queryById?volId=' + vol_id
+        result = self.call(url, 'GET', get_version=True)
         if result.get('errorCode') in constants.VOLUME_NOT_EXIST:
             return None
         self._assert_rest_result(
@@ -284,7 +300,7 @@ class RestCommon(object):
         return result
 
     def detach_volume(self, vol_name, manage_ip):
-        url = '/volume/detach/'
+        url = '/volume/detach'
         params = {"volName": [vol_name], "ipList": [manage_ip]}
         result = self.call(url, "POST", params)
         self._assert_rest_result(result, _('Detach volume session error.'))
@@ -323,13 +339,13 @@ class RestCommon(object):
         return None
 
     def create_snapshot(self, snapshot_name, vol_name):
-        url = '/snapshot/create/'
+        url = '/snapshot/create'
         params = {"volName": vol_name, "snapshotName": snapshot_name}
         result = self.call(url, "POST", params)
         self._assert_rest_result(result, _('Create snapshot error.'))
 
     def delete_snapshot(self, snapshot_name):
-        url = '/snapshot/delete/'
+        url = '/snapshot/delete'
         params = {"snapshotName": snapshot_name}
         result = self.call(url, "POST", params)
         if result.get('errorCode') in constants.SNAPSHOT_NOT_EXIST:
@@ -337,7 +353,7 @@ class RestCommon(object):
         self._assert_rest_result(result, _('Delete snapshot session error.'))
 
     def create_volume_from_snapshot(self, snapshot_name, vol_name, vol_size):
-        url = '/snapshot/volume/create/'
+        url = '/snapshot/volume/create'
         params = {"src": snapshot_name, "volName": vol_name,
                   "volSize": vol_size}
         result = self.call(url, "POST", params)
@@ -712,3 +728,21 @@ class RestCommon(object):
                 return None
             else:
                 raise
+
+    def get_iscsi_links_info(self, iscsi_link_count, pool_list):
+        iscsi_ips = []
+        url = "/dsware/service/iscsi/queryVbsIscsiLinks"
+        params = {"amount": iscsi_link_count,
+                  "poolList": pool_list}
+        try:
+            result = self.call(url, "POST", params, get_system_time=True)
+            self._assert_rest_result(
+                result, _("Get iscsi host relation session error."))
+        except Exception as err:
+            if constants.URL_NOT_FOUND in six.text_type(err):
+                return iscsi_ips
+            else:
+                raise
+
+        return [iscsi["ip"] for iscsi in result.get("iscsiLinks", [])
+                if iscsi.get("ip")]
