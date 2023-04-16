@@ -32,7 +32,7 @@ from cinder.volume.drivers.fusionstorage import fs_flow
 from cinder.volume.drivers.fusionstorage import fs_qos
 from cinder.volume.drivers.fusionstorage import fs_utils
 from cinder.volume.drivers.san import san
-from cinder.volume import volume_utils
+from cinder.volume import utils as volume_utils
 
 LOG = logging.getLogger(__name__)
 
