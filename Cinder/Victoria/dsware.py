@@ -113,7 +113,7 @@ CONF.register_opts(volume_opts)
 
 @interface.volumedriver
 class DSWAREBaseDriver(driver.VolumeDriver):
-    VERSION = '2.5.RC1'
+    VERSION = '2.5.RC4'
     CI_WIKI_NAME = 'Huawei_FusionStorage_CI'
 
     def __init__(self, *args, **kwargs):
@@ -231,15 +231,14 @@ class DSWAREBaseDriver(driver.VolumeDriver):
 
     def _check_volume_mapped(self, vol_name):
         host_list = self.client.get_host_by_volume(vol_name)
-        if ((len(host_list) > 1 and self.conf.force_delete_volume) or
-                len(host_list) == 1):
+        if host_list and self.configuration.force_delete_volume:
             msg = ('Volume %s has been mapped to host.'
                    ' Now force to delete it') % vol_name
             LOG.warning(msg)
             for host in host_list:
                 self.client.unmap_volume_from_host(host['hostName'], vol_name)
-        elif len(host_list) > 1 and not self.conf.force_delete_volume:
-            msg = 'Volume %s has been mapped to more than one host' % vol_name
+        elif host_list and not self.configuration.force_delete_volume:
+            msg = 'Volume %s has been mapped to host' % vol_name
             self._raise_exception(msg)
 
     @staticmethod

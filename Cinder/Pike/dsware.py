@@ -32,7 +32,7 @@ from cinder.volume.drivers.fusionstorage import fs_flow
 from cinder.volume.drivers.fusionstorage import fs_qos
 from cinder.volume.drivers.fusionstorage import fs_utils
 from cinder.volume.drivers.san import san
-from cinder.volume import volume_utils
+from cinder.volume import utils as volume_utils
 
 LOG = logging.getLogger(__name__)
 
@@ -730,13 +730,6 @@ class DSWAREDriver(DSWAREBaseDriver):
                 'data': properties}
 
     def terminate_connection(self, volume, connector, **kwargs):
-        attachments = volume.volume_attachment
-        if volume.multiattach and len(attachments) > 1 and sum(
-                1 for a in attachments if a.connector == connector) > 1:
-            LOG.info("Volume is multi-attach and attached to the same host"
-                     " multiple times")
-            return
-
         if self._check_volume_exist(volume):
             manager_ip = self._get_manager_ip(connector)
             vol_name = self._get_vol_name(volume)
@@ -782,13 +775,6 @@ class DSWAREISCSIDriver(DSWAREBaseDriver):
         def _terminate_connection_locked(host):
             LOG.info("Start to terminate iscsi connection, volume: %(vol)s, "
                      "connector: %(con)s", {"vol": volume, "con": connector})
-            attachments = volume.volume_attachment
-            if volume.multiattach and len(attachments) > 1 and sum(
-                    1 for a in attachments if a.connector == connector) > 1:
-                LOG.info("Volume is multi-attach and attached to the same host"
-                         " multiple times")
-                return
-
             if not self._check_volume_exist(volume):
                 LOG.info("Terminate_connection, volume %(vol)s is not exist "
                          "on the array ", {"vol": volume})
