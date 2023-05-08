@@ -1,0 +1,10 @@
+Defaults:openstack !requiretty
+
+openstack ALL = (root) NOPASSWD: /usr/bin/ln -s /host/sbin/multipath /sbin/multipath
+openstack ALL = (root) NOPASSWD: /usr/bin/ln -s /host/sbin/multipathd /sbin/multipathd
+openstack ALL = (root) NOPASSWD: /usr/bin/ln -s /host/usr/lib64/libmultipath.so.0 /usr/lib64/libmultipath.so.0
+openstack ALL = (root) NOPASSWD: /usr/bin/ln -s /host/usr/lib64/libmpathpersist.so.0 /usr/lib64/libmpathpersist.so.0
+openstack ALL = (root) NOPASSWD: /usr/bin/ln -s /host/usr/lib64/libmpathcmd.so.0 /usr/lib64/libmpathcmd.so.0
+
+openstack ALL = (root) NOPASSWD: /usr/bin/cp -R /block_driver_dir/fusionstorage /usr/lib/python2.7/site-packages/cinder/volume/drivers
+openstack ALL = (root) NOPASSWD: /usr/bin/cp -R /block_driver_dir/san /usr/lib/python2.7/site-packages/cinder/volume/drivers
