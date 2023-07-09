@@ -16,11 +16,11 @@
 import datetime
 import hashlib
 import ipaddress
-import pytz
 import random
-import six
 import time
 
+import pytz
+import six
 from oslo_log import log as logging
 from oslo_service import loopingcall
 from oslo_utils import units
@@ -758,3 +758,9 @@ def get_iscsi_info_from_storage(manager_ips, use_ipv6, valid_iscsi_ips,
                                 valid_node_ips):
     return _get_target_info(manager_ips, use_ipv6, valid_iscsi_ips,
                             valid_node_ips)
+
+
+def encode_name(my_uuid):
+    encoded_name = hashlib.md5(my_uuid.encode('utf-8')).hexdigest()
+    target_lun_prefix = my_uuid.split('-')[0] + '-'
+    return target_lun_prefix + encoded_name

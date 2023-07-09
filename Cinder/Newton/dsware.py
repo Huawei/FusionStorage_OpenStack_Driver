@@ -14,16 +14,22 @@
 #    under the License.
 
 import json
-
+import time
+import uuid
 from multiprocessing import Lock
+
+import six
 from oslo_config import cfg
 from oslo_log import log as logging
+from oslo_utils import excutils
 from oslo_utils import units
+from oslo_service import loopingcall
 
 from cinder import coordination
 from cinder import exception
 from cinder.i18n import _
 from cinder import interface
+from cinder import objects
 from cinder.volume import driver
 from cinder.volume.drivers.fusionstorage import constants
 from cinder.volume.drivers.fusionstorage import fs_client
@@ -101,6 +107,9 @@ volume_opts = [
     cfg.StrOpt('storage_key_filepath',
                default='',
                help='Client key directory.'),
+    cfg.BoolOpt('full_clone',
+                default=False,
+                help='Whether use full clone.'),
 ]
 
 CONF = cfg.CONF
@@ -109,7 +118,7 @@ CONF.register_opts(volume_opts)
 
 @interface.volumedriver
 class DSWAREBaseDriver(driver.VolumeDriver):
-    VERSION = '2.5.RC4'
+    VERSION = "2.6.1"
     CI_WIKI_NAME = 'Huawei_FusionStorage_CI'
 
     def __init__(self, *args, **kwargs):
@@ -206,6 +215,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
             "total_capacity_gb": capacity['total_capacity_gb'],
             "free_capacity_gb": capacity['free_capacity_gb'],
             "provisioned_capacity_gb": capacity['provisioned_capacity_gb'],
+            "location_info": self.client.esn,
             "QoS_support": True,
             'multiattach': True,
             "thin_provisioning_support": True,
@@ -243,8 +253,12 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         raise exception.VolumeBackendAPIException(data=msg)
 
     def _get_pool_id(self, volume):
-        pool_id_list = []
         pool_name = volume_utils.extract_host(volume.host, level='pool')
+        pool_id = self._get_pool_id_by_name(pool_name)
+        return pool_id
+
+    def _get_pool_id_by_name(self, pool_name):
+        pool_id_list = []
         all_pools = self.client.query_pool_info()
         for pool in all_pools:
             if pool_name == pool['poolName']:
@@ -359,29 +373,111 @@ class DSWAREBaseDriver(driver.VolumeDriver):
             self.client.delete_volume(vol_name=vol_name)
             raise
 
+    def _check_create_cloned_volume_finish(self, new_volume_name, start_time):
+        LOG.debug('Loopcall: _check_create_cloned_volume_finish(), '
+                  'volume-name %s',
+                  new_volume_name)
+        current_volume = self.client.query_volume_by_name(new_volume_name)
+
+        if current_volume and 'status' in current_volume:
+            status = int(current_volume['status'])
+            LOG.debug('Wait clone volume %(volume_name)s, status:%(status)s.',
+                      {"volume_name": new_volume_name,
+                       "status": status})
+            if status in {constants.REST_VOLUME_CREATING_STATUS,
+                          constants.REST_VOLUME_DUPLICATE_VOLUME}:
+                LOG.debug(_("Volume %s is cloning"), new_volume_name)
+            elif status == constants.REST_VOLUME_CREATE_SUCCESS_STATUS:
+                raise loopingcall.LoopingCallDone(retvalue=True)
+            else:
+                msg = _('Clone volume %(new_volume_name)s failed, '
+                        'the status is:%(status)s.')
+                LOG.error(msg, {'new_volume_name': new_volume_name,
+                                'status': status})
+                raise loopingcall.LoopingCallDone(retvalue=False)
+
+            max_time_out = constants.CLONE_VOLUME_TIMEOUT
+            current_time = time.time()
+            if (current_time - start_time) > max_time_out:
+                msg = _('Dsware clone volume time out. '
+                        'Volume: %(new_volume_name)s, status: %(status)s')
+                LOG.error(msg, {'new_volume_name': new_volume_name,
+                                'status': current_volume['status']})
+                raise loopingcall.LoopingCallDone(retvalue=False)
+        else:
+            LOG.warning(_('Can not find volume %s'), new_volume_name)
+            msg = "DSWARE clone volume failed:volume can not find from dsware"
+            LOG.error(msg)
+            raise loopingcall.LoopingCallDone(retvalue=False)
+
+    def _wait_for_create_cloned_volume_finish_timer(self, new_volume_name):
+        timer = loopingcall.FixedIntervalLoopingCall(
+            self._check_create_cloned_volume_finish,
+            new_volume_name, time.time())
+        LOG.debug('Calling _check_create_cloned_volume_finish: volume-name %s',
+                  new_volume_name)
+        ret = timer.start(interval=constants.CHECK_CLONED_INTERVAL).wait()
+        timer.stop()
+        return ret
+
     def create_volume_from_snapshot(self, volume, snapshot):
         vol_name = self._get_vol_name(volume)
         snapshot_name = self._get_snapshot_name(snapshot)
         vol_size = volume.size
+        pool_id = self._get_pool_id(volume)
 
         if not self._check_snapshot_exist(snapshot.volume, snapshot):
             msg = _("Snapshot: %(name)s does not exist!"
                     ) % {"name": snapshot_name}
             self._raise_exception(msg)
-        elif self._check_volume_exist(volume):
+        if self._check_volume_exist(volume):
             msg = _("Volume: %(vol_name)s already exists!"
                     ) % {'vol_name': vol_name}
             self._raise_exception(msg)
-        else:
-            vol_size *= units.Ki
+
+        vol_size *= units.Ki
+        if not self.configuration.full_clone:
             self.client.create_volume_from_snapshot(
                 snapshot_name=snapshot_name, vol_name=vol_name,
                 vol_size=vol_size)
-            self._add_qos_to_volume(volume, vol_name)
-            self._expand_volume_when_create(vol_name, vol_size)
-            result = self.client.query_volume_by_name(vol_name=vol_name)
-            return ({"metadata": {'lun_wwn': result.get('wwn')}}
-                    if result else {})
+        else:
+            self.client.create_volume(vol_name, vol_size, pool_id)
+            self.client.create_full_volume_from_snapshot(vol_name,
+                                                         snapshot_name)
+            ret = self._wait_for_create_cloned_volume_finish_timer(vol_name)
+            if not ret:
+                msg = _('Create full volume %s from snap failed') % vol_name
+                self._raise_exception(msg)
+        self._add_qos_to_volume(volume, vol_name)
+        self._expand_volume_when_create(vol_name, vol_size)
+        result = self.client.query_volume_by_name(vol_name=vol_name)
+        return ({"metadata": {'lun_wwn': result.get('wwn')}}
+                if result else {})
+
+    def _create_volume_from_volume_full_clone(self, vol_name, vol_size, pool_id,
+                                              src_vol_name):
+        tmp_snap_name = "temp" + src_vol_name + "clone" + vol_name
+
+        self.client.create_snapshot(tmp_snap_name, src_vol_name)
+        try:
+            self.client.create_volume(vol_name, vol_size, pool_id)
+        except Exception as err:
+            self.client.delete_snapshot(tmp_snap_name)
+            raise err
+
+        try:
+            self.client.create_full_volume_from_snapshot(
+                vol_name, tmp_snap_name)
+        except Exception as err:
+            self.client.delete_snapshot(tmp_snap_name)
+            self.client.delete_volume(vol_name)
+            raise err
+
+        ret = self._wait_for_create_cloned_volume_finish_timer(vol_name)
+        if not ret:
+            msg = _('Create full volume %s from snap failed') % vol_name
+            self._raise_exception(msg)
+        self.client.delete_snapshot(tmp_snap_name)
 
     def create_cloned_volume(self, volume, src_volume):
         vol_name = self._get_vol_name(volume)
@@ -394,15 +490,22 @@ class DSWAREBaseDriver(driver.VolumeDriver):
             msg = _("Volume: %(vol_name)s does not exist!"
                     ) % {"vol_name": src_vol_name}
             self._raise_exception(msg)
-        else:
+
+        if not self.configuration.full_clone:
             self.client.create_volume_from_volume(
                 vol_name=vol_name, vol_size=vol_size,
                 src_vol_name=src_vol_name)
-            self._add_qos_to_volume(volume, vol_name)
-            self._expand_volume_when_create(vol_name, vol_size)
-            result = self.client.query_volume_by_name(vol_name=vol_name)
-            return ({"metadata": {'lun_wwn': result.get('wwn')}}
-                    if result else {})
+        else:
+            pool_id = self._get_pool_id(volume)
+            self._create_volume_from_volume_full_clone(
+                vol_name=vol_name, vol_size=vol_size, pool_id=pool_id,
+                src_vol_name=src_vol_name)
+
+        self._add_qos_to_volume(volume, vol_name)
+        self._expand_volume_when_create(vol_name, vol_size)
+        result = self.client.query_volume_by_name(vol_name=vol_name)
+        return ({"metadata": {'lun_wwn': result.get('wwn')}}
+                if result else {})
 
     def create_snapshot(self, snapshot):
         snapshot_name = self._get_snapshot_name(snapshot)
@@ -577,12 +680,13 @@ class DSWAREBaseDriver(driver.VolumeDriver):
     def _check_need_changes_for_retype(self, volume, new_type, host, vol_name):
         before_change = {}
         after_change = {}
-        if volume.host != host["host"]:
-            msg = (_("Do not support retype between different host. Volume's "
+        migrate = False
+        if volume.host != host.get("host"):
+            migrate = True
+            msg = (_("retype support migration between different host. Volume's "
                      "host: %(vol_host)s, host's host: %(host)s")
-                   % {"vol_host": volume.host, "host": host['host']})
-            LOG.error(msg)
-            raise exception.InvalidInput(msg)
+                   % {"vol_host": volume.host, "host": host.get("host")})
+            LOG.info(msg)
 
         old_opts = fs_utils.get_volume_specs(self.client, vol_name)
         new_opts = fs_utils.get_volume_type_params(new_type, self.client)
@@ -592,7 +696,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
 
         change_opts = {"old_opts": before_change,
                        "new_opts": after_change}
-        return change_opts
+        return migrate, change_opts
 
     def retype(self, context, volume, new_type, diff, host):
         LOG.info("Retype volume: %(vol)s, new_type: %(new_type)s, "
@@ -603,12 +707,176 @@ class DSWAREBaseDriver(driver.VolumeDriver):
                   "host": host})
 
         vol_name = self._get_vol_name(volume)
-        change_opts = self._check_need_changes_for_retype(
+        migrate, change_opts = self._check_need_changes_for_retype(
             volume, new_type, host, vol_name)
+        if migrate:
+            src_lun_id = self._check_volume_exist_on_array(volume)
+            LOG.debug("Begin to migrate LUN(id: %(lun_id)s) with "
+                      "change %(change_opts)s.",
+                      {"lun_id": src_lun_id, "change_opts": change_opts})
+            moved = self._migrate_volume(volume, host, src_lun_id)
+            if not moved:
+                LOG.warning("Storage-assisted migration failed during "
+                            "retype.")
+                return False, None
         self._change_lun(vol_name, change_opts.get("new_opts"),
                          change_opts.get("old_opts"))
 
         return True, None
+
+    def migrate_volume(self, context, volume, host):
+        """Migrate a volume within the same array."""
+        LOG.info("Migrate Volume:%(volume)s, host:%(host)s",
+                 {"volume": volume.id,
+                  "host": host})
+        src_lun_id = self._check_volume_exist_on_array(volume)
+
+        moved = self._migrate_volume(volume, host, src_lun_id)
+        return moved, {}
+
+    def _create_dst_volume(self, volume, host):
+        pool_name = host['capabilities']['pool_name']
+        pool_id = self._get_pool_id_by_name(pool_name)
+        vol_name = fs_utils.encode_name(six.text_type(uuid.uuid4()))
+        vol_size = volume.size
+        vol_size *= units.Ki
+        self.client.create_volume(
+            pool_id=pool_id, vol_name=vol_name, vol_size=vol_size)
+
+        result = self.client.query_volume_by_name_v2(vol_name=vol_name)
+        dst_lun_id = result.get('id')
+        self._wait_volume_ready(vol_name)
+        return vol_name, dst_lun_id
+
+    def _migrate_volume(self, volume, host, src_lun_id):
+        """create migration task and wait for task done"""
+        if not self._check_migration_valid(host):
+            return False
+
+        vol_name, dst_lun_id = self._create_dst_volume(volume, host)
+
+        try:
+            self.client.create_lun_migration(src_lun_id, dst_lun_id)
+
+            def _is_lun_migration_complete():
+                return self._is_lun_migration_complete(src_lun_id, dst_lun_id)
+
+            wait_interval = constants.MIGRATION_WAIT_INTERVAL
+            fs_utils.wait_for_condition(_is_lun_migration_complete,
+                                        wait_interval,
+                                        constants.DEFAULT_WAIT_TIMEOUT)
+        # Clean up if migration failed.
+        except Exception as ex:
+            raise exception.VolumeBackendAPIException(data=ex)
+        finally:
+            if self._is_lun_migration_exist(src_lun_id, dst_lun_id):
+                self.client.delete_lun_migration(src_lun_id)
+            self._delete_lun_with_check(vol_name)
+
+        LOG.info("Migrate lun %s successfully.", src_lun_id)
+        return True
+
+    def _delete_lun_with_check(self, vol_name):
+        if self.client.query_volume_by_name(vol_name):
+            # migrate_dst_lun don't have qos, so don't
+            # need to remove qos, Delete the LUN directly.
+            self.client.delete_volume(vol_name)
+
+    def _is_lun_migration_complete(self, src_lun_id, dst_lun_id):
+        result = self.client.get_lun_migration_task_by_id(src_lun_id)
+        found_migration_task = False
+        if not result:
+            return False
+
+        if (str(src_lun_id) == result.get('parent_id') and
+                str(dst_lun_id) == result.get('target_lun_id')):
+            found_migration_task = True
+            if constants.MIGRATION_COMPLETE == result.get('running_status'):
+                return True
+            if constants.MIGRATION_FAULT == result.get('running_status'):
+                msg = _("Lun migration error. "
+                        "the migration task running_status is abnormal")
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=msg)
+
+        if not found_migration_task:
+            err_msg = _("lun migration error, Cannot find migration task.")
+            LOG.error(err_msg)
+            raise exception.VolumeBackendAPIException(data=err_msg)
+
+        return False
+
+    def _is_lun_migration_exist(self, src_lun_id, dst_lun_id):
+        try:
+            result = self.client.get_lun_migration_task_by_id(src_lun_id)
+        except Exception:
+            LOG.error("Get LUN migration error.")
+            return False
+
+        if (str(src_lun_id) == result.get('parent_id') and
+                str(dst_lun_id) == result.get('target_lun_id')):
+            return True
+        return False
+
+    def _wait_volume_ready(self, vol_name):
+        wait_interval = constants.DEFAULT_WAIT_INTERVAL
+
+        def _volume_ready():
+            result = self.client.query_volume_by_name_v2(vol_name)
+            if not result:
+                return False
+
+            if (result.get('health_status') == constants.STATUS_HEALTH
+                    and result.get('running_status') == constants.STATUS_VOLUME_READY):
+                return True
+            return False
+
+        fs_utils.wait_for_condition(_volume_ready,
+                                    wait_interval,
+                                    wait_interval * 10)
+
+    def _check_migration_valid(self, host):
+        if 'pool_name' not in host.get('capabilities', {}):
+            return False
+
+        target_device = host.get('capabilities', {}).get('location_info')
+
+        # Source and destination should be on same array.
+        if target_device != self.client.esn:
+            LOG.error("lun migration error, "
+                      "Source and destination should be on same array")
+            return False
+
+        pool_name = host.get('capabilities', {}).get('pool_name', '')
+        if len(pool_name) == 0:
+            LOG.error("lun migration error, pool_name not exists")
+            return False
+
+        return True
+
+    def _check_volume_exist_on_array(self, volume):
+        volume_name = self._get_vol_name(volume)
+        result = self._check_volume_exist(volume)
+        if not result:
+            msg = _("Volume %s does not exist on the array."
+                    ) % volume.id
+            self._raise_exception(msg)
+
+        lun_wwn = result.get('wwn')
+        if not lun_wwn:
+            LOG.debug("No LUN WWN recorded for volume %s.", volume.id)
+
+        lun_id = result.get('volId')
+        if not lun_id:
+            msg = _("Volume %s does not exist on the array."
+                    ) % volume.id
+            self._raise_exception(msg)
+
+        if self.client.get_volume_snapshot(volume_name):
+            msg = _("Volume %s which have snapshot cannot do lun migration"
+                    ) % volume.id
+            self._raise_exception(msg)
+        return lun_id
 
     def _rollback_snapshot(self, vol_name, snap_name):
         def _snapshot_rollback_finish():
@@ -665,6 +933,265 @@ class DSWAREBaseDriver(driver.VolumeDriver):
     def remove_export(self, context, volume):
         pass
 
+    def create_group(self, context, group):
+        """Creates a group. Driver only need to return state"""
+        if not volume_utils.is_group_a_cg_snapshot_type(group):
+            LOG.info("Group's type is not a "
+                     "consistent snapshot group enabled type")
+            raise NotImplementedError()
+
+        return self.create_consistencygroup(context, group)
+
+    def create_consistencygroup(self, context, group):
+        """Creates a group. Driver only need to return state"""
+        LOG.info("Create group successfully")
+        return {'status': 'available'}
+
+    def update_group(self, context, group,
+                     add_volumes=None, remove_volumes=None):
+        """
+        The volume manager will adds/removes the volume to/from the
+        group in the database, if need add_volumes, Driver just need
+         to check whether volume is in array or not
+        """
+        if not volume_utils.is_group_a_cg_snapshot_type(group):
+            LOG.info("Group's type is not a "
+                     "consistent snapshot group enabled type")
+            raise NotImplementedError()
+
+        return self.update_consistencygroup(
+            context, group, add_volumes, remove_volumes)
+
+    def update_consistencygroup(self, context, group,
+                                add_volumes=None, remove_volumes=None):
+        """
+        The volume manager will adds/removes the volume to/from the
+        group in the database, if need add_volumes, Driver just need
+         to check whether volume is in array or not
+        """
+        if add_volumes is None:
+            add_volumes = []
+        for volume in add_volumes:
+            try:
+                self._check_volume_exist_on_array(volume)
+            except Exception:
+                with excutils.save_and_reraise_exception():
+                    LOG.error("The add_volume %s not exist on array" % volume.id)
+
+        model_update = {'status': 'available'}
+        LOG.info("Update group successfully")
+        return model_update, None, None
+
+    def delete_group(self, context, group, volumes):
+        """delete the group, Driver need to delete relation lun on array"""
+        if not volume_utils.is_group_a_cg_snapshot_type(group):
+            LOG.info("Group's type is not a "
+                     "consistent snapshot group enabled type")
+            raise NotImplementedError()
+
+        return self.delete_consistencygroup(context, group, volumes)
+
+    def delete_consistencygroup(self, context, group, volumes):
+        """delete the group, Driver need to delete relation lun on array"""
+        volumes_model_update = []
+        model_update = {'status': 'deleted'}
+        for volume in volumes:
+            volume_model_update = {'id': volume.id}
+            try:
+                self.delete_volume(volume)
+            except Exception:
+                LOG.error('Delete volume %s failed.' % volume)
+                volume_model_update.update({'status': 'error_deleting'})
+            else:
+                volume_model_update.update({'status': 'deleted'})
+
+            LOG.info('Deleted volume %s successfully' % volume)
+            volumes_model_update.append(volume_model_update)
+
+        LOG.info("Delete group successfully")
+        return model_update, volumes_model_update
+
+    def create_group_from_src(self, context, group, volumes,
+                              group_snapshot=None, snapshots=None,
+                              source_group=None, source_vols=None):
+        """
+        create group from group or group-snapshot,
+        Driver need to create volume from volume or snapshot
+        """
+        if not volume_utils.is_group_a_cg_snapshot_type(group):
+            LOG.info("Group's type is not a "
+                     "consistent snapshot group enabled type")
+            raise NotImplementedError()
+
+        return self.create_consistencygroup_from_src(context, group, volumes,
+                                                     group_snapshot, snapshots,
+                                                     source_group, source_vols)
+
+    def create_consistencygroup_from_src(self, context, group, volumes,
+                                         group_snapshot=None, snapshots=None,
+                                         source_group=None, source_vols=None):
+        """
+        create group from group or group-snapshot,
+        Driver need to create volume from volume or snapshot
+        """
+        model_update = self.create_consistencygroup(context, group)
+        volumes_model_update = []
+        delete_snapshots = False
+
+        if not snapshots and source_vols:
+            snapshots = []
+            for src_volume in source_vols:
+                volume_kwargs = {
+                    'id': src_volume.id,
+                    '_name_id': None,
+                    'host': src_volume.host
+                }
+                snapshot_kwargs = {
+                    'id': six.text_type(uuid.uuid4()),
+                    'volume': objects.Volume(**volume_kwargs)
+                }
+                snapshots.append(objects.Snapshot(**snapshot_kwargs))
+
+            self._create_group_snapshot(snapshots)
+            delete_snapshots = True
+
+        if snapshots:
+            volumes_model_update = self._create_volume_from_group_snapshot(
+                volumes, snapshots, delete_snapshots)
+
+        if delete_snapshots:
+            self._delete_group_snapshot(snapshots)
+
+        LOG.info("Create group from src successfully")
+        return model_update, volumes_model_update
+
+    def _create_volume_from_group_snapshot(self, volumes, snapshots, delete_snapshots):
+        volumes_model_update = []
+        added_volumes = []
+        for i, volume in enumerate(volumes):
+            try:
+                vol_model_update = self.create_volume_from_snapshot(
+                    volume, snapshots[i])
+                vol_model_update.update({'id': volume.id})
+                volumes_model_update.append(vol_model_update)
+                added_volumes.append(volume)
+            except Exception:
+                LOG.error("Create volume from snapshot error, Delete the newly created lun.")
+                with excutils.save_and_reraise_exception():
+                    self._delete_added_volume_snapshots(
+                        added_volumes, snapshots, delete_snapshots)
+
+        return volumes_model_update
+
+    def _delete_added_volume_snapshots(
+            self, added_volumes, snapshots, delete_snapshots):
+        if delete_snapshots:
+            self._delete_group_snapshot(snapshots)
+        for add_volume in added_volumes:
+            vol_name = self._get_vol_name(add_volume)
+            self.fs_qos.remove(vol_name)
+            self.client.delete_volume(vol_name=vol_name)
+            LOG.info("delete storage newly added "
+                     "volume success, volume is %s" % add_volume.id)
+
+    def create_group_snapshot(self, context, group_snapshot, snapshots):
+        """Create group snapshot."""
+        if not volume_utils.is_group_a_cg_snapshot_type(group_snapshot):
+            LOG.info("group_snapshot's type is not a "
+                     "consistent snapshot group enabled type")
+            raise NotImplementedError()
+
+        return self.create_cgsnapshot(context, group_snapshot, snapshots)
+
+    def create_cgsnapshot(self, context, group_snapshot, snapshots):
+        """Create group snapshot."""
+        LOG.info('Create group snapshot for group: %(group_snapshot)s',
+                 {'group_snapshot': group_snapshot})
+
+        try:
+            snapshots_model_update = self._create_group_snapshot(snapshots)
+        except Exception as err:
+            msg = ("Create group snapshots failed. "
+                   "Group snapshot id: %s. Reason is %s") % (group_snapshot.id, err)
+            LOG.error(msg)
+            raise exception.CinderException(msg)
+
+        model_update = {'status': 'available'}
+        return model_update, snapshots_model_update
+
+    def _create_group_snapshot(self, snapshots):
+        """Generate snapshots for all volumes in the group."""
+        snapshots_model_update = []
+        snapshot_group_list = []
+
+        for snapshot in snapshots:
+            snapshot_name = self._get_snapshot_name(snapshot)
+            vol_name = self._get_vol_name(snapshot.volume)
+            snapshot_group_list.append({
+                'name': snapshot_name,
+                'sub_type': '0',
+                'volume_name': vol_name
+            })
+            snapshot_model_update = {
+                'id': snapshot.id,
+                'status': 'available',
+            }
+            snapshots_model_update.append(snapshot_model_update)
+        try:
+            self.client.create_consistent_snapshot_by_name(snapshot_group_list)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                LOG.error("Create consistent snapshot failed, "
+                          "snapshot_group_list is %s" % snapshot_group_list)
+
+        return snapshots_model_update
+
+    def delete_group_snapshot(self, context, group_snapshot, snapshots):
+        """Delete group snapshot."""
+        if not volume_utils.is_group_a_cg_snapshot_type(group_snapshot):
+            LOG.info("group_snapshot's type is not a "
+                     "consistent snapshot group enabled type")
+            raise NotImplementedError()
+
+        return self.delete_cgsnapshot(context, group_snapshot, snapshots)
+
+    def delete_cgsnapshot(self, context, group_snapshot, snapshots):
+        """Delete group snapshot."""
+        LOG.info("Delete group_snapshot %s for "
+                 "consistency group: %s" % (group_snapshot.id, group_snapshot))
+
+        try:
+            snapshots_model_update = self._delete_group_snapshot(snapshots)
+        except Exception as err:
+            msg = ("Delete cg snapshots failed. "
+                   "group snapshot id: %s, reason is %s") % (group_snapshot.id, err)
+            LOG.error(msg)
+            raise exception.CinderException(msg)
+
+        model_update = {'status': 'deleted'}
+        return model_update, snapshots_model_update
+
+    def _delete_group_snapshot(self, snapshots):
+        """Delete all snapshots in snapshot group"""
+        snapshots_model_update = []
+        for snapshot in snapshots:
+            snapshot_model_update = {
+                'id': snapshot.id,
+                'status': 'deleted'
+            }
+            snapshots_model_update.append(snapshot_model_update)
+            snapshot_name = self._get_snapshot_name(snapshot)
+
+            if not self._check_snapshot_exist(snapshot.volume, snapshot):
+                LOG.info("snapshot %s not exist in array, "
+                         "don't need to delete, try next one" % snapshot_name)
+                continue
+            self.client.delete_snapshot(snapshot_name=snapshot_name)
+            LOG.info("Delete snapshot successfully,"
+                     " the deleted snapshots is %s" % snapshot_name)
+
+        return snapshots_model_update
+
 
 class DSWAREDriver(DSWAREBaseDriver):
     def get_volume_stats(self, refresh=False):
@@ -717,7 +1244,7 @@ class DSWAREDriver(DSWAREBaseDriver):
         vol_wwn = volume_info.get('wwn')
         by_id_path = "/dev/disk/by-id/" + "wwn-0x%s" % vol_wwn
         properties = {'device_path': by_id_path}
-        import time
+
         LOG.info("Wait %(t)s second(s) for scanning the target device %(dev)s."
                  % {"t": self.configuration.scan_device_timeout,
                     "dev": by_id_path})
