@@ -14,16 +14,16 @@
 #    under the License.
 
 import json
+
 import requests
 import six
-import time
+from oslo_log import log as logging
 from requests.adapters import HTTPAdapter
 
 from cinder import exception
 from cinder.i18n import _
 from cinder.volume.drivers.fusionstorage import constants
 
-from oslo_log import log as logging
 LOG = logging.getLogger(__name__)
 
 
@@ -43,7 +43,8 @@ class RestCommon(object):
         self.session = None
         self.token = None
         self.version = None
-        mutual_authentication = extend_conf.get("mutual_authentication")
+        self.esn = None
+        mutual_authentication = extend_conf.get("mutual_authentication", {})
         self.init_http_head(mutual_authentication)
 
         LOG.warning("Suppressing requests library SSL Warnings")
@@ -147,6 +148,13 @@ class RestCommon(object):
         if result.get("currentVersion"):
             self.version = result["currentVersion"]
 
+    def get_esn(self):
+        url = "/cluster/sn"
+        result = self.call(url, "get")
+        self._assert_rest_result(result, _('Get cluster esn error.'))
+        self.esn = result.get("sn")
+        return self.esn
+
     def login(self):
         self.get_version()
         url = '/sec/login'
@@ -160,6 +168,7 @@ class RestCommon(object):
         self.session.headers.update({
             "x-auth-token": self.token
         })
+        self.get_esn()
 
     def logout(self):
         url = '/sec/logout'
@@ -263,6 +272,15 @@ class RestCommon(object):
         self._assert_rest_result(
             result, _("Query volume by name session error"))
         return result.get('lunDetailInfo')
+
+    def query_volume_by_name_v2(self, vol_name):
+        url = '/api/v2/block_service/volumes?name=' + vol_name
+        result = self.call(url, 'GET', get_system_time=True)
+        if result.get('errorCode') in constants.VOLUME_NOT_EXIST:
+            return {}
+        self._assert_rest_result(
+            result, _("Query volume by name session error"))
+        return result.get('data', {})
 
     def query_volume_by_id(self, vol_id):
         url = 'v1.3/volume/queryById?volId=' + vol_id
@@ -693,24 +711,28 @@ class RestCommon(object):
             else:
                 raise
 
-    def get_iscsi_host_relation(self, host_name):
-        iscsi_ips = []
+    def _get_iscsi_host_relation(self, key):
         url = "/dsware/service/iscsi/queryIscsiHostRelation"
-        params = [{"key": host_name, "flag": 0}]
+        params = [{"key": key, "flag": 0}]
         try:
             result = self.call(url, "POST", params, get_system_time=True)
             self._assert_rest_result(
                 result, _("Get iscsi host relation session error."))
 
-            for iscsi in result.get("hostList", []):
-                if int(iscsi.get("flag")) == constants.HOST_FLAG:
-                    iscsi_ips = iscsi.get("content", "").split(";")
-            return iscsi_ips
+            return result
         except Exception as err:
             if constants.URL_NOT_FOUND in six.text_type(err):
-                return iscsi_ips
+                return {}
             else:
                 raise
+
+    def get_iscsi_host_relation(self, host_name):
+        result = self._get_iscsi_host_relation(host_name)
+        iscsi_ips = []
+        for iscsi in result.get("hostList", []):
+            if int(iscsi.get("flag")) == constants.HOST_FLAG:
+                iscsi_ips = iscsi.get("content", "").split(";")
+        return iscsi_ips
 
     def delete_iscsi_host_relation(self, host_name, ip_list):
         if not ip_list:
@@ -746,3 +768,83 @@ class RestCommon(object):
 
         return [iscsi["ip"] for iscsi in result.get("iscsiLinks", [])
                 if iscsi.get("ip")]
+
+    def create_lun_migration(self, src_lun_id, dst_lun_id, speed=2):
+        url = "/api/v2/block_service/lun_migration"
+        params = {
+            "parent_id": src_lun_id,
+            "target_lun_id": dst_lun_id,
+            "speed": speed,
+            "work_mode": 0
+        }
+        result = self.call(url, "POST", params, get_system_time=True)
+        self._assert_rest_result(result,
+                                 _("create lun migration task error."))
+
+    def get_lun_migration_task_by_id(self, src_lun_id):
+        url = "/api/v2/block_service/lun_migration"
+        params = {
+            "id": src_lun_id
+        }
+        result = self.call(url, "GET", params, get_system_time=True)
+        self._assert_rest_result(result,
+                                 _("get lun migration task error."))
+        return result.get('data', {})
+
+    def delete_lun_migration(self, src_lun_id):
+        url = "/api/v2/block_service/lun_migration"
+        params = {
+            'id': src_lun_id
+        }
+        result = self.call(url, "DELETE", params, get_system_time=True)
+        self._assert_rest_result(result,
+                                 _("Delete lun migration task error."))
+
+    def get_volume_snapshot(self, volume_name):
+        url = "/volume/snapshot/list"
+        params = {
+            'volName': volume_name,
+            'batchNum': 1,
+            'batchLimit': 10
+        }
+        result = self.call(url, "POST", params)
+        return result.get('snapshotList', [])
+
+    def create_consistent_snapshot_by_name(self, snapshot_group_list):
+        url = "/api/v2/block_service/consistency_snapshots"
+        result = self.call(url, "POST", snapshot_group_list, get_system_time=True)
+        self._assert_rest_result(result, _("create consistent_snapshot error."))
+        return result.get('data', [])
+
+    def create_full_volume_from_snapshot(self, vol_name, snapshot_name):
+        url = '/api/v2/block_service/createFullVolumeFromSnap'
+        params = {"snap_name_src": snapshot_name, "volume_name_dst": vol_name}
+        result = self.call(url, "POST", params, get_system_time=True)
+        self._assert_rest_result(
+            result, _("create full volume from snap fails"))
+
+    def is_support_links_balance_by_pool(self):
+        result = self._get_iscsi_host_relation('get_newiscsi')
+        if result.get("newIscsi"):
+            LOG.info("Support new iscsi interface to get iscsi ip.")
+            return True
+        return False
+
+    def get_iscsi_links_by_pool(self, iscsi_link_count, pool_name, host_name):
+        url = "/dsware/service/iscsi/queryIscsiLinks"
+        params = {
+            "amount": iscsi_link_count,
+            "poolList": [pool_name],
+            "hostKey": host_name
+        }
+
+        try:
+            result = self.call(url, "POST", params, get_system_time=True)
+            self._assert_rest_result(
+                result, _("Get iscsi links by pool error."))
+            return result
+        except Exception as err:
+            if constants.URL_NOT_FOUND in six.text_type(err):
+                return {}
+            else:
+                raise
