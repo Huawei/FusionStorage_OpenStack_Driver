@@ -122,7 +122,7 @@ CONF.register_opts(volume_opts)
 
 @interface.volumedriver
 class DSWAREBaseDriver(driver.VolumeDriver):
-    VERSION = "2.6.1"
+    VERSION = "2.6.2"
     CI_WIKI_NAME = 'Huawei_FusionStorage_CI'
 
     def __init__(self, *args, **kwargs):
@@ -204,7 +204,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         total = float(pool_info['totalCapacity']) / units.Ki
         free = (float(pool_info['totalCapacity']) -
                 float(pool_info['usedCapacity'])) / units.Ki
-        provisioned = float(pool_info['usedCapacity']) / units.Ki
+        provisioned = float(pool_info['allocatedCapacity']) / units.Ki
         pool_capacity['total_capacity_gb'] = total
         pool_capacity['free_capacity_gb'] = free
         pool_capacity['provisioned_capacity_gb'] = provisioned
@@ -225,6 +225,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
             "thin_provisioning_support": True,
             'max_over_subscription_ratio':
                 self.configuration.max_over_subscription_ratio,
+            "reserved_percentage": self.configuration.safe_get('reserved_percentage'),
         })
         return status
 
@@ -1265,6 +1266,18 @@ class DSWAREDriver(DSWAREBaseDriver):
 
 
 class DSWAREISCSIDriver(DSWAREBaseDriver):
+    def __init__(self, *args, **kwargs):
+        super(DSWAREISCSIDriver, self).__init__(*args, **kwargs)
+        self.support_iscsi_links_balance_by_pool = False
+
+    def do_setup(self, context):
+        super(DSWAREISCSIDriver, self).do_setup(context)
+        if self.configuration.iscsi_manager_groups or self.configuration.target_ips:
+            self.support_iscsi_links_balance_by_pool = False
+        else:
+            self.support_iscsi_links_balance_by_pool = \
+                self.client.is_support_links_balance_by_pool()
+
     def check_for_setup_error(self):
         super(DSWAREISCSIDriver, self).check_for_setup_error()
         fs_utils.check_iscsi_group_valid(
@@ -1286,9 +1299,16 @@ class DSWAREISCSIDriver(DSWAREBaseDriver):
             raise exception.InvalidInput(reason=msg)
 
         vol_name = self._get_vol_name(volume)
+        pool_name = volume_utils.extract_host(volume.host, level='pool')
+        iscsi_params = {
+            'configuration': self.configuration,
+            'manager_groups': self.manager_groups,
+            'thread_lock': self.lock,
+            'pool_name': pool_name,
+            'support_iscsi_links_balance_by_pool': self.support_iscsi_links_balance_by_pool
+        }
         properties = fs_flow.initialize_iscsi_connection(
-            self.client, vol_name, connector, self.configuration,
-            self.manager_groups, self.lock)
+            self.client, vol_name, connector, iscsi_params)
 
         LOG.info("Finish initialize iscsi connection, return: %s, the "
                  "remaining manager groups are %s",
