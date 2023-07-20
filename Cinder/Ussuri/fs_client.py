@@ -711,24 +711,28 @@ class RestCommon(object):
             else:
                 raise
 
-    def get_iscsi_host_relation(self, host_name):
-        iscsi_ips = []
+    def _get_iscsi_host_relation(self, key):
         url = "/dsware/service/iscsi/queryIscsiHostRelation"
-        params = [{"key": host_name, "flag": 0}]
+        params = [{"key": key, "flag": 0}]
         try:
             result = self.call(url, "POST", params, get_system_time=True)
             self._assert_rest_result(
                 result, _("Get iscsi host relation session error."))
 
-            for iscsi in result.get("hostList", []):
-                if int(iscsi.get("flag")) == constants.HOST_FLAG:
-                    iscsi_ips = iscsi.get("content", "").split(";")
-            return iscsi_ips
+            return result
         except Exception as err:
             if constants.URL_NOT_FOUND in six.text_type(err):
-                return iscsi_ips
+                return {}
             else:
                 raise
+
+    def get_iscsi_host_relation(self, host_name):
+        result = self._get_iscsi_host_relation(host_name)
+        iscsi_ips = []
+        for iscsi in result.get("hostList", []):
+            if int(iscsi.get("flag")) == constants.HOST_FLAG:
+                iscsi_ips = iscsi.get("content", "").split(";")
+        return iscsi_ips
 
     def delete_iscsi_host_relation(self, host_name, ip_list):
         if not ip_list:
@@ -818,3 +822,29 @@ class RestCommon(object):
         result = self.call(url, "POST", params, get_system_time=True)
         self._assert_rest_result(
             result, _("create full volume from snap fails"))
+
+    def is_support_links_balance_by_pool(self):
+        result = self._get_iscsi_host_relation('get_newiscsi')
+        if result.get("newIscsi"):
+            LOG.info("Support new iscsi interface to get iscsi ip.")
+            return True
+        return False
+
+    def get_iscsi_links_by_pool(self, iscsi_link_count, pool_name, host_name):
+        url = "/dsware/service/iscsi/queryIscsiLinks"
+        params = {
+            "amount": iscsi_link_count,
+            "poolList": [pool_name],
+            "hostKey": host_name
+        }
+
+        try:
+            result = self.call(url, "POST", params, get_system_time=True)
+            self._assert_rest_result(
+                result, _("Get iscsi links by pool error."))
+            return result
+        except Exception as err:
+            if constants.URL_NOT_FOUND in six.text_type(err):
+                return {}
+            else:
+                raise
