@@ -201,6 +201,12 @@ class RestCommon(object):
         self._assert_rest_result(result, _("Query pool session error."))
         return result['storagePools']
 
+    def query_storage_pool_info(self):
+        url = "/cluster/storagepool/queryStoragePool"
+        result = self.call(url, 'GET', get_version=True, filter_flag=True)
+        self._assert_rest_result(result, _("Query pool session error."))
+        return result.get('storagePools', [])
+
     def _get_volume_num_by_pool(self, pool_id):
         pool_info = self.query_pool_info(pool_id)
         return pool_info[0].get('volumeNum', 0)
