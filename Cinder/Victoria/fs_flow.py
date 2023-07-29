@@ -230,13 +230,15 @@ class UnMapLunFromHostTask(task.Task):
 class GetISCSIProperties(task.Task):
     default_provides = 'properties'
 
-    def __init__(self, client, configuration, manager_groups, thread_lock,
-                 *args, **kwargs):
+    def __init__(self, client, iscsi_params, *args, **kwargs):
         super(GetISCSIProperties, self).__init__(*args, **kwargs)
         self.client = client
-        self.configuration = configuration
-        self.manager_groups = manager_groups
-        self.thread_lock = thread_lock
+        self.configuration = iscsi_params.get('configuration')
+        self.manager_groups = iscsi_params.get('manager_groups')
+        self.thread_lock = iscsi_params.get('thread_lock')
+        self.pool_name = iscsi_params.get("pool_name")
+        self.support_iscsi_links_balance_by_pool = iscsi_params.get(
+            "support_iscsi_links_balance_by_pool")
 
     @staticmethod
     def _construct_properties(multipath, target_lun, target_ips, target_iqns):
@@ -254,6 +256,22 @@ class GetISCSIProperties(task.Task):
                 "target_portal": target_ips[0],
             })
         return properties
+
+    @staticmethod
+    def _get_iscsi_info_from_iscsi_links(iscsi_links_info):
+        iscsi_ips = []
+        iscsi_iqns = []
+        for iscsi_info in iscsi_links_info:
+            if iscsi_info.get("iscsiPortal") and iscsi_info.get("targetName"):
+                iscsi_ips.append(iscsi_info.get("iscsiPortal"))
+                iscsi_iqns.append(iscsi_info.get("targetName"))
+
+        if not iscsi_ips:
+            msg = _("No available iscsi port can be found, Please Check Storage")
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+
+        return iscsi_ips, iscsi_iqns
 
     def _find_target_ips(self):
         config_target_ips = self.configuration.target_ips
@@ -328,6 +346,15 @@ class GetISCSIProperties(task.Task):
                  target_ips, target_iqns)
         return target_ips, target_iqns
 
+    def _find_iscsi_ips_from_storage_pool(self, host_name, pool_name):
+        # The host obtains different iSCSI links for different storage pools.
+        # Obtain the same links for the same storage pool.
+        iscsi_links_result = self.client.get_iscsi_links_by_pool(
+            self.configuration.iscsi_link_count, pool_name, host_name)
+        target_ips_format, target_iqns = self._get_iscsi_info_from_iscsi_links(
+            iscsi_links_result.get("iscsiLinks", []))
+        return target_ips_format, target_iqns
+
     def execute(self, host_name, vol_name, multipath):
         LOG.info("Get ISCSI initialize connection properties.")
         target_lun = fs_utils.get_target_lun(self.client, host_name, vol_name)
@@ -336,6 +363,9 @@ class GetISCSIProperties(task.Task):
             target_ips, target_iqns = self._find_iscsi_ips(host_name)
         elif self.configuration.target_ips:
             target_ips, target_iqns = self._find_target_ips()
+        elif self.pool_name and self.support_iscsi_links_balance_by_pool:
+            target_ips, target_iqns = self._find_iscsi_ips_from_storage_pool(
+                host_name, self.pool_name)
         else:
             target_ips, target_iqns = self._find_iscsi_ips_from_storage(
                 host_name)
@@ -377,8 +407,7 @@ def get_iscsi_required_params(vol_name, connector, client=None):
     return vol_name, host_name, host_group_name, initiator_name, multipath
 
 
-def initialize_iscsi_connection(client, vol_name, connector, configuration,
-                                manager_groups, thread_lock):
+def initialize_iscsi_connection(client, vol_name, connector, iscsi_params):
     (vol_name, host_name, host_group_name, initiator_name,
      multipath) = get_iscsi_required_params(vol_name, connector)
 
@@ -404,7 +433,7 @@ def initialize_iscsi_connection(client, vol_name, connector, configuration,
         )
 
     work_flow.add(
-        GetISCSIProperties(client, configuration, manager_groups, thread_lock)
+        GetISCSIProperties(client, iscsi_params)
     )
 
     engine = taskflow.engines.load(work_flow, store=store_spec)
