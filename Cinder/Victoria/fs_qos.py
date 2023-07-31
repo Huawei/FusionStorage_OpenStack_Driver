@@ -29,7 +29,11 @@ class FusionStorageQoS(object):
 
     def add(self, qos, vol_name):
         localtime = time.strftime('%Y%m%d%H%M%S', time.localtime())
-        qos_name = constants.QOS_PREFIX + localtime
+        # QoS policy name. The value contains 1 to 63 characters.
+        # So we intercept volume_name Ensure that the length does not exceed 63
+        vol_str = vol_name[-constants.QOS_MAX_INTERCEPT_LENGTH::] \
+            if len(vol_name) >= constants.QOS_MAX_INTERCEPT_LENGTH else vol_name
+        qos_name = constants.QOS_PREFIX + localtime + '_' + vol_str
         self.client.create_qos(qos_name, qos)
         try:
             self.client.associate_qos_with_volume(vol_name, qos_name)
@@ -38,7 +42,7 @@ class FusionStorageQoS(object):
             raise
 
     def _is_qos_associate_to_volume(self, qos_name):
-        all_pools = self.client.query_pool_info()
+        all_pools = self.client.query_storage_pool_info()
         volumes = None
         for pool in all_pools:
             volumes = self.client.get_qos_volume_info(

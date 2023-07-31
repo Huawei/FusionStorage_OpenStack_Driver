@@ -16,11 +16,11 @@
 import datetime
 import hashlib
 import ipaddress
-import pytz
 import random
-import six
 import time
 
+import pytz
+import six
 from oslo_log import log as logging
 from oslo_service import loopingcall
 from oslo_utils import units
@@ -217,16 +217,20 @@ def _get_qos_specs(qos_specs_id, client):
     kvs = specs.get('specs', {})
     LOG.info('The QoS specs is: %s.', kvs)
 
-    qos = dict()
-    for k, v in kvs.items():
+    return get_qos_param(kvs, client)
+
+
+def get_qos_param(qos_vals, client):
+    qos_param = dict()
+    for k, v in qos_vals.items():
         _raise_qos_is_invalid(k)
-        qos = _set_qos(qos, k, v)
+        qos_param = _set_qos(qos_param, k, v)
 
-    _raise_qos_not_set(qos)
-    _set_default_qos(qos)
-    qos = _get_trigger_qos(qos, client)
+    _raise_qos_not_set(qos_param)
+    _set_default_qos(qos_param)
+    qos_param = _get_trigger_qos(qos_param, client)
 
-    return qos
+    return qos_param
 
 
 def _deal_date_increase_or_decrease(is_date_decrease, is_date_increase, qos):
@@ -758,3 +762,9 @@ def get_iscsi_info_from_storage(manager_ips, use_ipv6, valid_iscsi_ips,
                                 valid_node_ips):
     return _get_target_info(manager_ips, use_ipv6, valid_iscsi_ips,
                             valid_node_ips)
+
+
+def encode_name(my_uuid):
+    encoded_name = hashlib.md5(my_uuid.encode('utf-8')).hexdigest()
+    target_lun_prefix = my_uuid.split('-')[0] + '-'
+    return target_lun_prefix + encoded_name
