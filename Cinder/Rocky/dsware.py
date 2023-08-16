@@ -115,6 +115,9 @@ volume_opts = [
     cfg.BoolOpt('full_clone',
                 default=False,
                 help='Whether use full clone.'),
+    cfg.IntOpt('rest_timeout',
+               default=constants.DEFAULT_TIMEOUT,
+               help='timeout when call storage restful api.'),
 ]
 
 CONF = cfg.CONF
@@ -122,8 +125,8 @@ CONF.register_opts(volume_opts)
 
 
 @interface.volumedriver
-class DSWAREBaseDriver(driver.VolumeDriver,
-                       customization_driver.DriverForZTE):
+class DSWAREBaseDriver(customization_driver.DriverForZTE,
+                       driver.VolumeDriver):
     VERSION = "2.6.2"
     CI_WIKI_NAME = 'Huawei_FusionStorage_CI'
 
@@ -162,7 +165,8 @@ class DSWAREBaseDriver(driver.VolumeDriver,
         }
 
         extend_conf = {
-            "mutual_authentication": mutual_authentication
+            "mutual_authentication": mutual_authentication,
+            "rest_timeout": self.configuration.rest_timeout
         }
 
         self.client = fs_client.RestCommon(fs_address=url_str,
