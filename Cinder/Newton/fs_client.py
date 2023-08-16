@@ -44,6 +44,8 @@ class RestCommon(object):
         self.token = None
         self.version = None
         self.esn = None
+        self.rest_timeout = extend_conf.get(
+            "rest_timeout", constants.DEFAULT_TIMEOUT)
         mutual_authentication = extend_conf.get("mutual_authentication", {})
         self.init_http_head(mutual_authentication)
 
@@ -93,11 +95,13 @@ class RestCommon(object):
         return result.json() if json_flag else result
 
     def call(self, url, method, data=None,
-             call_timeout=constants.DEFAULT_TIMEOUT, **input_kwargs):
+             call_timeout=None, **input_kwargs):
         filter_flag = input_kwargs.get("filter_flag")
         json_flag = input_kwargs.get("json_flag", True)
         get_version = input_kwargs.get("get_version")
         get_system_time = input_kwargs.get("get_system_time")
+        if call_timeout is None:
+            call_timeout = self.rest_timeout
 
         kwargs = {'timeout': call_timeout}
         if data is not None:
@@ -110,7 +114,7 @@ class RestCommon(object):
             result = func(call_url, **kwargs)
         except Exception as err:
             LOG.error('Bad response from server: %(url)s. '
-                      'Error: %(err)s'), {'url': call_url, 'err': err}
+                      'Error: %(err)s', {'url': call_url, 'err': err})
             return {"error": {
                 "code": constants.CONNECT_ERROR,
                 "description": "Connect to server error."}}
@@ -200,6 +204,12 @@ class RestCommon(object):
         result = self.call(url, 'GET', filter_flag=True)
         self._assert_rest_result(result, _("Query pool session error."))
         return result['storagePools']
+
+    def query_storage_pool_info(self):
+        url = "/cluster/storagepool/queryStoragePool"
+        result = self.call(url, 'GET', get_version=True, filter_flag=True)
+        self._assert_rest_result(result, _("Query pool session error."))
+        return result.get('storagePools', [])
 
     def _get_volume_num_by_pool(self, pool_id):
         pool_info = self.query_pool_info(pool_id)
