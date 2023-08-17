@@ -42,7 +42,7 @@ class FusionStorageQoS(object):
             raise
 
     def _is_qos_associate_to_volume(self, qos_name):
-        all_pools = self.client.query_pool_info()
+        all_pools = self.client.query_storage_pool_info()
         volumes = None
         for pool in all_pools:
             volumes = self.client.get_qos_volume_info(

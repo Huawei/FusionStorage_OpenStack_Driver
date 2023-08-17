@@ -215,16 +215,20 @@ def _get_qos_specs(qos_specs_id, client):
     kvs = specs.get('specs', {})
     LOG.info('The QoS specs is: %s.', kvs)
 
-    qos = dict()
-    for k, v in kvs.items():
+    return get_qos_param(kvs, client)
+
+
+def get_qos_param(qos_vals, client):
+    qos_param = dict()
+    for k, v in qos_vals.items():
         _raise_qos_is_invalid(k)
-        qos = _set_qos(qos, k, v)
+        qos_param = _set_qos(qos_param, k, v)
 
-    _raise_qos_not_set(qos)
-    _set_default_qos(qos)
-    qos = _get_trigger_qos(qos, client)
+    _raise_qos_not_set(qos_param)
+    _set_default_qos(qos_param)
+    qos_param = _get_trigger_qos(qos_param, client)
 
-    return qos
+    return qos_param
 
 
 def _deal_date_increase_or_decrease(is_date_decrease, is_date_increase, qos):

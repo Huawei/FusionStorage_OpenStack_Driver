@@ -37,6 +37,7 @@ from cinder.volume.drivers.fusionstorage import fs_conf
 from cinder.volume.drivers.fusionstorage import fs_flow
 from cinder.volume.drivers.fusionstorage import fs_qos
 from cinder.volume.drivers.fusionstorage import fs_utils
+from cinder.volume.drivers.fusionstorage import customization_driver
 from cinder.volume.drivers.san import san
 from cinder.volume import volume_utils
 
@@ -114,6 +115,9 @@ volume_opts = [
     cfg.BoolOpt('full_clone',
                 default=False,
                 help='Whether use full clone.'),
+    cfg.IntOpt('rest_timeout',
+               default=constants.DEFAULT_TIMEOUT,
+               help='timeout when call storage restful api.'),
 ]
 
 CONF = cfg.CONF
@@ -121,7 +125,8 @@ CONF.register_opts(volume_opts)
 
 
 @interface.volumedriver
-class DSWAREBaseDriver(driver.VolumeDriver):
+class DSWAREBaseDriver(customization_driver.DriverForZTE,
+                       driver.VolumeDriver):
     VERSION = "2.6.2"
     CI_WIKI_NAME = 'Huawei_FusionStorage_CI'
 
@@ -160,7 +165,8 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         }
 
         extend_conf = {
-            "mutual_authentication": mutual_authentication
+            "mutual_authentication": mutual_authentication,
+            "rest_timeout": self.configuration.rest_timeout
         }
 
         self.client = fs_client.RestCommon(fs_address=url_str,
@@ -171,7 +177,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         self.fs_qos = fs_qos.FusionStorageQoS(self.client)
 
     def check_for_setup_error(self):
-        all_pools = self.client.query_pool_info()
+        all_pools = self.client.query_storage_pool_info()
         all_pools_name = [p['poolName'] for p in all_pools
                           if p.get('poolName')]
 
@@ -190,7 +196,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
                 "pools": [],
                 "vendor_name": "Huawei"
                 }
-        all_pools = self.client.query_pool_info()
+        all_pools = self.client.query_storage_pool_info()
 
         for pool in all_pools:
             if pool['poolName'] in self.configuration.pools_name:
@@ -264,7 +270,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
 
     def _get_pool_id_by_name(self, pool_name):
         pool_id_list = []
-        all_pools = self.client.query_pool_info()
+        all_pools = self.client.query_storage_pool_info()
         for pool in all_pools:
             if pool_name == pool['poolName']:
                 pool_id_list.append(pool['poolId'])
@@ -716,6 +722,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
             volume, new_type, host, vol_name)
         if migrate:
             src_lun_id = self._check_volume_exist_on_array(volume)
+            self._check_volume_snapshot_exist(volume)
             LOG.debug("Begin to migrate LUN(id: %(lun_id)s) with "
                       "change %(change_opts)s.",
                       {"lun_id": src_lun_id, "change_opts": change_opts})
@@ -735,6 +742,7 @@ class DSWAREBaseDriver(driver.VolumeDriver):
                  {"volume": volume.id,
                   "host": host})
         src_lun_id = self._check_volume_exist_on_array(volume)
+        self._check_volume_snapshot_exist(volume)
 
         moved = self._migrate_volume(volume, host, src_lun_id)
         return moved, {}
@@ -860,7 +868,6 @@ class DSWAREBaseDriver(driver.VolumeDriver):
         return True
 
     def _check_volume_exist_on_array(self, volume):
-        volume_name = self._get_vol_name(volume)
         result = self._check_volume_exist(volume)
         if not result:
             msg = _("Volume %s does not exist on the array."
@@ -877,11 +884,14 @@ class DSWAREBaseDriver(driver.VolumeDriver):
                     ) % volume.id
             self._raise_exception(msg)
 
+        return lun_id
+
+    def _check_volume_snapshot_exist(self, volume):
+        volume_name = self._get_vol_name(volume)
         if self.client.get_volume_snapshot(volume_name):
             msg = _("Volume %s which have snapshot cannot do lun migration"
                     ) % volume.id
             self._raise_exception(msg)
-        return lun_id
 
     def _rollback_snapshot(self, vol_name, snap_name):
         def _snapshot_rollback_finish():
