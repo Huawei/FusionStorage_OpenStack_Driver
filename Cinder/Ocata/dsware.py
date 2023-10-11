@@ -121,7 +121,7 @@ CONF.register_opts(volume_opts)
 
 
 @interface.volumedriver
-class DSWAREBaseDriver(customization_driver.DriverForZTE,
+class DSWAREBaseDriver(customization_driver.DriverForPlatform,
                        driver.VolumeDriver):
     VERSION = "2.6.2"
     CI_WIKI_NAME = 'Huawei_FusionStorage_CI'
