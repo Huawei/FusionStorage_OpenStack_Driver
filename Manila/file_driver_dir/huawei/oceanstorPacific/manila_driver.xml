@@ -1,0 +1,20 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<config>
+	<Storage>
+		<Product>Pacific</Product>
+		<RestURL>https://ip:8088/api/v2/</RestURL>
+		<UserName>admin</UserName>
+		<UserPassword>xxxxxx</UserPassword>
+		<SslCertPath>/etc/DJSecurity/mgmt-dev-ca</SslCertPath>
+		<SslCertVerify>True</SslCertVerify>
+		<Reserved_percentage>15</Reserved_percentage>
+		<Max_over_subscription_ratio>1</Max_over_subscription_ratio>
+    </Storage>
+<HypermetroDevice />
+	<Filesystem>
+		<StoragePool>0</StoragePool>
+		<AllocType>Thin</AllocType>
+		<AccountName>test-account</AccountName>
+		<ClusterDomainName>nfs-ip</ClusterDomainName>
+	</Filesystem>
+</config>
