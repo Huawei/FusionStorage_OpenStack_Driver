@@ -121,9 +121,9 @@ CONF.register_opts(volume_opts)
 
 
 @interface.volumedriver
-class DSWAREBaseDriver(customization_driver.DriverForZTE,
+class DSWAREBaseDriver(customization_driver.DriverForPlatform,
                        driver.VolumeDriver):
-    VERSION = "2.6.2"
+    VERSION = "2.6.RC2"
     CI_WIKI_NAME = 'Huawei_FusionStorage_CI'
 
     def __init__(self, *args, **kwargs):
@@ -228,6 +228,7 @@ class DSWAREBaseDriver(customization_driver.DriverForZTE,
             'max_over_subscription_ratio':
                 self.configuration.max_over_subscription_ratio,
             "reserved_percentage": self.configuration.safe_get('reserved_percentage'),
+            "support_extend_with_snapshot": True,
         })
         return status
 

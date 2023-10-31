@@ -128,10 +128,10 @@ def get_volume_type_params(volume_type, client):
     vol_params = {}
 
     if isinstance(volume_type, dict) and volume_type.get('qos_specs_id'):
-        vol_params['qos'] = _get_qos_specs(volume_type['qos_specs_id'], client)
+        vol_params['qos'] = get_qos_specs(volume_type['qos_specs_id'], client)
     elif isinstance(volume_type, objects.VolumeType
                     ) and volume_type.qos_specs_id:
-        vol_params['qos'] = _get_qos_specs(volume_type.qos_specs_id, client)
+        vol_params['qos'] = get_qos_specs(volume_type.qos_specs_id, client)
 
     LOG.info('volume opts %s.', vol_params)
     return vol_params
@@ -208,7 +208,7 @@ def _set_default_qos(qos):
         qos.pop("total_bytes_sec")
 
 
-def _get_qos_specs(qos_specs_id, client):
+def get_qos_specs(qos_specs_id, client):
     ctxt = context.get_admin_context()
     specs = qos_specs.get_qos_specs(ctxt, qos_specs_id)
     if not _is_qos_specs_valid(specs):
