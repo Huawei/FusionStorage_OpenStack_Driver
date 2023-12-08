@@ -195,13 +195,13 @@ class RestHelper:
             err_msg = (_("Delete namespace({0}) failed.".format(namespace_name)))
             raise exception.InvalidShare(reason=err_msg)
 
-    def query_quota_by_parent(self, namespace_id):
+    def query_quota_by_parent(self, parent_id, parent_type):
         """This interface is used to query namespace quotas in batches."""
 
         url = "converged_service/quota"
         query_para = {
-            "parent_type": constants.QUOTA_PARENT_TYPE_NAMESPACE,
-            "parent_id": namespace_id,
+            "parent_type": parent_type,
+            "parent_id": parent_id,
             "space_unit_type": constants.QUOTA_UNIT_TYPE_GB,
             "range": "{\"offset\": 0, \"limit\": 10}"
         }
@@ -209,19 +209,19 @@ class RestHelper:
         result = self.call(url, data, "GET")
 
         if result['result']['code'] == 0 and result['data']:
-            LOG.info(_("Query quota success.(namespace_id: {0})".format(namespace_id)))
+            LOG.info(_("Query quota success.(parent_id: {0})".format(parent_id)))
         else:
-            err_msg = _("Query quota  failed.(namespace_id: {0})".format(namespace_id))
+            err_msg = _("Query quota  failed.(parent_id: {0})".format(parent_id))
             raise exception.InvalidShare(reason=err_msg)
 
         return result['data'][0]
 
-    def creat_quota(self, namespace_id, quota_size):
+    def creat_quota(self, namespace_id, quota_size, quota_type):
         """This interface is used to create a namespace quota."""
 
         url = "converged_service/quota"
         quota_para = {
-            "parent_type": constants.QUOTA_PARENT_TYPE_NAMESPACE,
+            "parent_type": quota_type,
             "parent_id": namespace_id,
             "quota_type": constants.QUOTA_TYPE_DIRECTORY,
             "space_hard_quota": quota_size,
@@ -680,7 +680,7 @@ class RestHelper:
         }
         data = jsonutils.dumps(query_para)
         result = self.call(url, data, "GET")
-        self._assert_result(result, 'Get lun counts error.')
+        self._assert_result(result, 'Get namespace counts error.')
         return result.get('data', {}).get('count', 0)
 
     def get_all_namespace_info(self, account_id):
@@ -715,7 +715,7 @@ class RestHelper:
 
         offset = 0
         total_info = []
-        while counts >= offset:
+        while counts > offset:
             result = func(offset, extra_param)
             data_info = result.get("data", [])
             total_info = total_info + data_info
@@ -780,3 +780,97 @@ class RestHelper:
             raise exception.InvalidShare(reason=err_msg)
 
         return
+
+    def create_dtree(self, dtree_name, namespace_name):
+        """create dtree by namespace name"""
+
+        url = "file_service/dtrees"
+        dtree_params = {
+            'name': dtree_name,
+            'file_system_name': namespace_name
+        }
+        data = jsonutils.dumps(dtree_params)
+        result = self.call(url, data, 'POST')
+
+        if result.get('result', {}).get('code') == 0:
+            LOG.info(_("Create dtree of namespace success.(dtree_name: {0},"
+                       " namespace_name: {1})".format(dtree_name, namespace_name)))
+        else:
+            err_msg = _("Create dtree of namespace failed.(dtree_name: {0},"
+                        " namespace_name: {1})".format(dtree_name, namespace_name))
+            raise exception.InvalidShare(reason=err_msg)
+        return result.get('data')
+
+    def delete_dtree(self, dtree_name, namespace_name):
+        """delete dtree by dtree name and namespace_name"""
+        url = "file_service/dtrees?name={0}&file_system_name={1}".format(
+            dtree_name, namespace_name)
+        result = self.call(url, None, "DELETE")
+
+        if result.get('result', {}).get('code') == 0:
+            LOG.info(_("Delete dtree of namespace success.(dtree_name: {0},"
+                       " namespace_name: {1})".format(dtree_name, namespace_name)))
+        else:
+            err_msg = _("Delete dtree of namespace failed.(dtree_name: {0}, "
+                        "namespace_name: {1})".format(dtree_name, namespace_name))
+            raise exception.InvalidShare(reason=err_msg)
+
+    def create_dtree_nfs_share(self, namespace_name, dtree_name, account_id):
+        """This interface is to create dtree nfs share"""
+        url = "nas_protocol/nfs_share"
+        nfs_para = {
+            'share_path': '/' + namespace_name + '/' + dtree_name,
+            'account_id': account_id
+        }
+        data = jsonutils.dumps(nfs_para)
+        result = self.call(url, data, "POST")
+
+        if result['result']['code'] == 0 and result['data']:
+            LOG.info(_("Create Dtree NFS share success."
+                       "(namespace_name: {0}, dtree_name: {1})".format(namespace_name, dtree_name)))
+        else:
+            err_msg = _("Create Dtree NFS share failed."
+                        "(namespace_name: {0}, dtree_name: {1})".format(namespace_name, dtree_name))
+            raise exception.InvalidShare(reason=err_msg)
+
+    def create_dtree_cifs_share(self, namespace_name, dtree_name, account_id):
+        """This interface is used to create a CIFS share."""
+
+        url = "file_service/cifs_share"
+        cifs_param = {
+            "name": dtree_name,
+            "share_path": '/' + namespace_name + '/' + dtree_name,
+            "account_id": account_id,
+        }
+
+        data = jsonutils.dumps(cifs_param)
+        result = self.call(url, data, "POST")
+
+        if result['result']['code'] == 0 and result['data']:
+            LOG.info(_("Create Dtree CIFS share success."
+                       "(namespace_name: {0}, dtree_name: {1})".format(namespace_name, dtree_name)))
+        else:
+            err_msg = _("Create Dtree CIFS share failed."
+                        "(namespace_name: {0}, dtree_name: {1})".format(namespace_name, dtree_name))
+            raise exception.InvalidShare(reason=err_msg)
+
+    def query_dtree_by_name(self, dtree_name, namespace_id):
+        """Query the configurations of a namespace based on its name"""
+
+        url = "file_service/dtrees"
+        query_para = {
+            'file_system_id': namespace_id,
+            'filter': {'name': dtree_name}
+        }
+        data = jsonutils.dumps(query_para)
+        result = self.call(url, data, "GET")
+
+        if result['result']['code'] == 0 and result['data']:
+            LOG.info(_("Query dtree success.(dtree_name: {0})".format(dtree_name)))
+        elif result['result']['code'] == constants.NAMESPACE_NOT_EXIST and not result['data']:
+            LOG.info(_("Query dtree does not exist.(dtree_name: {0})".format(dtree_name)))
+        else:
+            err_msg = _("Query dtree_name({0}) failed".format(dtree_name))
+            raise exception.InvalidShare(reason=err_msg)
+
+        return result.get('data', [])

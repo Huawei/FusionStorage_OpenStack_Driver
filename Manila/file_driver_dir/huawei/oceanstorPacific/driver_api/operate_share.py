@@ -29,7 +29,7 @@ LOG = log.getLogger(__name__)
 share_api = api.API()
 
 
-class OperateShare:
+class OperateShare(object):
     def __init__(self, helper, share):
         self.helper = helper
         self.share = share
@@ -40,7 +40,9 @@ class OperateShare:
         self.account_id = None  # 账户Id
         self.namespace_name = None  # 命名空间名称
         self.namespace_id = None  # 命名空间Id
-        self.share_proto = self.share['share_proto'].split('&')  # 共享协议类型
+        self.export_locations = None  # share路径信息
+        self.quota_id = None  # 配额ID
+        self.share_proto = self.share.get('share_proto', '').split('&')  # 共享协议类型
         self.tier_info = {}  # 分级策略信息
         self.qos_config = {}  # QOS策略信息
 
@@ -58,84 +60,42 @@ class OperateShare:
         self._create_qos()
         self._create_tier_migrate_policy()
         self._create_share_protocol()
-
-        location = []
-        if 'DPC' in self.share_proto:
-            location.append('DPC:/' + self.namespace_name)
-        if 'NFS' in self.share_proto:
-            location.append('NFS:' + self.domain + ":/" + self.namespace_name)
-        if 'CIFS' in self.share_proto:
-            location.append('CIFS:\\\\' + self.domain + '\\' + self.namespace_name)
-        if 'HDFS' in self.share_proto:
-            location.append('HDFS:/' + self.namespace_name)
-
-        return location
+        return self._get_location()
 
     def delete_share(self):
-
-        account_name = self._find_account_name(self.root)
-        result = self.helper.query_account_by_name(account_name)
-        self.account_id = result.get('id')
-
-        if not self.share['export_locations'] or not self.share['export_locations'][0]['path']:
+        if not self.share.get('export_locations') or not self.share.get('export_locations')[0].get('path'):
             LOG.warn(_(" share fail for invalid export location."))
-            return
+            return False
 
-        export_locations = self.share['export_locations'][0]['path']
-        self.namespace_name = export_locations.split('\\')[-1].split('/')[-1]
-        result = self.helper.query_namespace_by_name(self.namespace_name)
-        self.namespace_id = result.get('id')
-
+        self._get_account_id()
+        self._get_namespace_info()
         self._delete_share_protocol()
         self.helper.delete_qos(self.namespace_name)
         self.helper.delete_namespace(self.namespace_name)
         self._delete_account()
+        return True
 
     def ensure_share(self):
-
-        if not self.share['export_locations'] or not self.share['export_locations'][0]['path']:
+        if not self.share.get('export_locations') or not self.share.get('export_locations')[0].get('path'):
             err_msg = _(" share fail for invalid export location.")
             raise exception.InvalidShare(reason=err_msg)
 
-        export_locations = self.share['export_locations'][0]['path']
-        self.namespace_name = export_locations.split('\\')[-1].split('/')[-1]
-
-        result = self.helper.query_namespace_by_name(self.namespace_name)
-        status = result.get('running_status')
-        if status != 0:
-            err_msg = _("The running status of share({0}) is not normal.".format(self.namespace_name))
-            raise exception.InvalidShare(reason=err_msg)
-
-        location = []
-        for export_location in self.share['export_locations']:
-            location.append(export_location['path'])
-
-        return location
+        result = self._get_namespace_info()
+        self._check_namespace_running_status(result)
+        return self._get_ensure_share_location()
 
     def change_share(self, new_size, action):
 
-        if not self.share['export_locations'] or not self.share['export_locations'][0]['path']:
+        if not self.share.get('export_locations') or not self.share.get('export_locations')[0].get('path'):
             err_msg = _("share fail for invalid export location.")
             raise exception.InvalidShare(reason=err_msg)
 
-        export_locations = self.share['export_locations'][0]['path']
-        self.namespace_name = export_locations.split('\\')[-1].split('/')[-1]
-
-        result = self.helper.query_namespace_by_name(self.namespace_name)
-        self.namespace_id = result.get('id')
-        cur_size = float(result['space_used']) / 1024 / 1024
-        cur_size = math.ceil(cur_size)
-
-        result = self.helper.query_quota_by_parent(self.namespace_id)
-        quota_id = result['id']
-
-        action = action.title()
-        if (action == 'Shrink') and (cur_size > new_size):
-            err_msg = (_("Shrink share fail for space used({0}G) > new size({1}G)".format(cur_size, new_size)))
-            raise exception.InvalidInput(reason=err_msg)
-
-        self.helper.change_quota_size(quota_id, new_size)
+        namespace_info = self._get_namespace_info()
+        self._get_quota_info(namespace_info, action, self.namespace_id,
+                             new_size, constants.QUOTA_PARENT_TYPE_NAMESPACE)
+        self.helper.change_quota_size(self.quota_id, new_size)
         LOG.info("{0} share done. New size:{1}.".format(action, new_size))
+        return True
 
     def _check_domain(self):
         """当共享协议类型存在Nfs或Cifs时，检查配置文件集群域名是否存在"""
@@ -280,20 +240,16 @@ class OperateShare:
 
     def _create_namespace(self):
         """
-        获取未使用的命名空间名称
-        命名空间名称取用户指定的名称，如果用户未指定，生成规则为share_xxx xxx为shareId的前四个字节
-        检查是否有相同的名称存在，如果存在加上后缀“_0x”，从0开始递增，最多递增到10。
         在对应账户下创建命名空间
+        命名空间名称首先取用户指定的名称，如果用户取指定去share_instance_id
         """
 
         if self.share['display_name']:
-            share_name = self.share['display_name']
+            self.namespace_name = 'share-' + self.share.get('display_name')
         else:
-            share_name = 'share_' + self.share['id'][:4]
+            self.namespace_name = 'share-' + self.share.get('id')
 
         try:
-            self._create_namespace_find_namespace_name(share_name)
-
             forbidden_dpc = constants.SUPPORT_DPC if 'DPC' in self.share_proto else constants.NOT_SUPPORT_DPC
             storage_pool_id = self.free_pool[0]
             result = self.helper.create_namespace(self.namespace_name, storage_pool_id, self.account_id,
@@ -308,7 +264,8 @@ class OperateShare:
 
         quota_size = self.share['size']
         try:
-            self.helper.creat_quota(self.namespace_id, quota_size)
+            self.helper.creat_quota(self.namespace_id, quota_size,
+                                    constants.QUOTA_PARENT_TYPE_NAMESPACE)
         except Exception as e:
             self._rollback_creat(1)
             raise e
@@ -327,6 +284,7 @@ class OperateShare:
 
     def _create_tier_migrate_policy(self):
         """创建迁移策略，迁移策略名称和命名空间名称相同"""
+
         tier_name = self.namespace_name
         enable_tier = self.tier_info['enable_tier']
         strategy = self.tier_info['strategy']
@@ -404,3 +362,59 @@ class OperateShare:
         else:
             LOG.info("The account has namespace or access zone. "
                      "Cannot delete.(account_id: {0})".format(self.account_id))
+
+    def _get_account_id(self):
+        """通过账户名称去存储查询账户信息并获取账户ID"""
+        account_name = self._find_account_name(self.root)
+        result = self.helper.query_account_by_name(account_name)
+        self.account_id = result.get('id')
+
+    def _get_namespace_info(self):
+        """
+        先通过share的location获取namespace名称，
+        再根据namespace名称查询namespace信息并获取namespace id
+        """
+        self.export_locations = self.share.get('export_locations')[0].get('path')
+        self.namespace_name = self.export_locations.split('\\')[-1].split('/')[-1]
+        result = self.helper.query_namespace_by_name(self.namespace_name)
+        self.namespace_id = result.get('id')
+        return result
+
+    def _check_namespace_running_status(self, result):
+        status = result.get('running_status')
+        if status != 0:
+            err_msg = _("The running status of share({0}) is not normal.".format(self.namespace_name))
+            raise exception.InvalidShare(reason=err_msg)
+
+    def _get_ensure_share_location(self):
+        location = []
+        for export_location in self.share.get('export_locations'):
+            location.append(export_location.get('path'))
+
+        return location
+
+    def _get_location(self):
+        """返回共享路径"""
+        location = []
+        if 'DPC' in self.share_proto:
+            location.append('DPC:/' + self.namespace_name)
+        if 'NFS' in self.share_proto:
+            location.append('NFS:' + self.domain + ":/" + self.namespace_name)
+        if 'CIFS' in self.share_proto:
+            location.append('CIFS:\\\\' + self.domain + '\\' + self.namespace_name)
+        if 'HDFS' in self.share_proto:
+            location.append('HDFS:/' + self.namespace_name)
+
+        return location
+
+    def _get_quota_info(self, namespace_info, action, parent_id, new_size, parent_type):
+        cur_size = float(namespace_info.get('space_used')) / constants.CAPACITY_UNIT_KB_TO_GB
+        cur_size = math.ceil(cur_size)
+
+        result = self.helper.query_quota_by_parent(parent_id, parent_type)
+        self.quota_id = result.get('id')
+
+        action = action.title()
+        if (action == 'Shrink') and (cur_size > new_size):
+            err_msg = (_("Shrink share fail for space used({0}G) > new sizre({1}G)".format(cur_size, new_size)))
+            raise exception.InvalidInput(reason=err_msg)
