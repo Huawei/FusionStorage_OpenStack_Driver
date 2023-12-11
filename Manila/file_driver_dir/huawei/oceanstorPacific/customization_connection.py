@@ -96,3 +96,18 @@ class OceanStorPacificStorageConnectionForSuyan(OceanStorPacificStorageConnectio
         """
         share_qos_info = driver_api.CustomizationOperate(self.helper, share).parse_cmcc_qos_options()
         return share_qos_info
+
+    def ensure_share(self, share, share_server):
+        """
+        校验shre的状态，苏研定制接口下二级目录获取namespace的方式有变化
+        """
+        location = driver_api.CustomizationOperate(self.helper, share).ensure_share()
+        return location
+
+    def extend_share(self, share, new_size, share_server):
+        """苏研定制需求需要对二级目录实现扩容，因此重新此方法"""
+        driver_api.CustomizationOperate(self.helper, share).change_share(new_size, 'extend')
+
+    def shrink_share(self, share, new_size, share_server):
+        """苏研定制需求需要对二级目录实现缩容，因此重新此方法"""
+        driver_api.CustomizationOperate(self.helper, share).change_share(new_size, 'shrink')

@@ -24,7 +24,7 @@ from ..helper import constants
 LOG = log.getLogger(__name__)
 
 
-class CheckUpdateStorage:
+class CheckUpdateStorage(object):
     def __init__(self, helper, root):
         self.helper = helper
         self.root = root

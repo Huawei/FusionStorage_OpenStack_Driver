@@ -34,19 +34,27 @@ class HuaweiNasDriverForSuyan(HuaweiNasDriver):
 
     def get_all_share_usage(self):
         """苏研定制接口，获取所有的share信息 返回存储上所有的share"""
+
+        LOG.info("********************Do get all share usages.********************")
         all_share_usages = self.plugin.get_all_share_usage()
         return all_share_usages
 
     def get_share_usage(self, share, share_usages):
         """苏研定制接口，通过get_all_share_usage查询返回的所有share信息，获取到需要的share容量信息"""
+
+        LOG.info("********************Do get share usage.********************")
         share_capacity = self.plugin.get_share_usage(share, share_usages)
         return share_capacity
 
     def update_qos(self, share, qos_specs):
         """苏研定制接口，通过qos_specs中的qos信息，对share进行qos更新"""
+
+        LOG.info("********************Do update qos.********************")
         self.plugin.update_qos(share, qos_specs)
 
     def _parse_cmcc_qos_options(self, share):
         """苏研定制接口，返回share绑定的qos信息"""
+
+        LOG.info("********************Do parse cmcc qos options.********************")
         share_qos_info = self.plugin.parse_cmcc_qos_options(share)
         return share_qos_info

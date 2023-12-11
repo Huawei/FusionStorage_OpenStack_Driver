@@ -32,7 +32,9 @@ class ChangeAccess(object):
 
         self.account_id = None
         self.namespace_name = None
-        self.share_proto = self.share['share_proto'].split('&')
+        self.share_proto = self.share.get('share_proto', '').split('&')
+        self.share_path = None
+        self.export_locations = None  # share路径信息
         self.nfs_share_id = None
         self.cifs_share_id = None
         self.nfs_rules = []
@@ -41,14 +43,7 @@ class ChangeAccess(object):
     def update_access(self, access_rules, add_rules, delete_rules):
         """Update access rules list."""
         self._get_account_and_namespace_information()
-        if not (add_rules or delete_rules):
-            self._clear_access()
-            self._classify_rules(access_rules, 'allow')
-        else:
-            if add_rules:
-                self._classify_rules(add_rules, 'allow')
-            if delete_rules:
-                self._classify_rules(delete_rules, 'deny')
+        self._update_access_for_share(access_rules, add_rules, delete_rules)
 
     def allow_access(self, access):
         self._get_account_and_namespace_information()
@@ -59,38 +54,15 @@ class ChangeAccess(object):
         self._classify_rules([access], 'deny')
 
     def _find_account_id(self):
-        account_name = self.share['project_id']
+        account_name = self.share.get('project_id')
         result = self.helper.query_account_by_name(account_name)
         self.account_id = result.get('id')
 
     def _get_account_and_namespace_information(self):
         self._find_account_id()
-        if not self.share['export_locations'] or not self.share['export_locations'][0]['path']:
-            err_msg = _("share fail for invalid export location.")
-            raise exception.InvalidShare(reason=err_msg)
-        export_locations = self.share['export_locations'][0]['path']
-        self.namespace_name = export_locations.split('\\')[-1].split('/')[-1]
-        share_path = '/' + self.namespace_name + '/'
-
-        if 'NFS' in self.share_proto:
-            result = self.helper.query_nfs_share_information(self.account_id)
-            for nfs_share in result:
-                if share_path == nfs_share['share_path']:
-                    self.nfs_share_id = nfs_share.get('id')
-                    break
-            else:
-                err_msg = _("Cannot get NFS share id(namespace_name:{0}).".format(self.namespace_name))
-                raise exception.InvalidShare(reason=err_msg)
-
-        if 'CIFS' in self.share_proto:
-            result = self.helper.query_cifs_share_information(self.account_id)
-            for cifs_share in result:
-                if share_path == cifs_share['share_path']:
-                    self.cifs_share_id = cifs_share.get('id')
-                    break
-            else:
-                err_msg = _("Cannot get CIFS share id(namespace_name:{0}).".format(self.namespace_name))
-                raise exception.InvalidShare(reason=err_msg)
+        self._get_export_location_info()
+        self._get_share_related_info()
+        self._query_and_set_share_info()
 
     def _classify_rules(self, rules, action):
 
@@ -176,8 +148,9 @@ class ChangeAccess(object):
             for data in result:
                 self.helper.deny_access_for_cifs(data['id'], self.account_id)
 
-    def _check_ip_valid(self, ip):
-        '''
+    @staticmethod
+    def _check_ip_valid(ip):
+        """
         rules for IP address authorization scenarios:
         1. only supports one IPv4 address or address segment.
         2. when IP is address segment, format is "ip/mask", the range of
@@ -189,7 +162,7 @@ class ChangeAccess(object):
 
            :param ip: ip or ip segment
            :return: True is ip valid, else False
-        '''
+        """
         if ip == "0.0.0.0/0":
             return True
 
@@ -225,3 +198,51 @@ class ChangeAccess(object):
             return False
 
         return True
+
+    def _get_export_location_info(self):
+        """校验share是否包含path信息，有则初始化"""
+
+        if not self.share.get('export_locations') or not self.share.get('export_locations')[0].get('path'):
+            err_msg = _("share fail for invalid export location.")
+            raise exception.InvalidShare(reason=err_msg)
+        self.export_locations = self.share.get('export_locations')[0].get('path')
+
+    def _get_share_related_info(self):
+        """获取命名空间的名称和share的路径信息"""
+
+        self.namespace_name = self.export_locations.split('\\')[-1].split('/')[-1]
+        self.share_path = '/' + self.namespace_name + '/'
+
+    def _query_and_set_share_info(self):
+        """根据share_path信息查询对应的share信息"""
+
+        if 'NFS' in self.share_proto:
+            result = self.helper.query_nfs_share_information(self.account_id)
+            for nfs_share in result:
+                if self.share_path == nfs_share.get('share_path'):
+                    self.nfs_share_id = nfs_share.get('id')
+                    break
+            else:
+                err_msg = _("Cannot get NFS share id(namespace_name:{0}).".format(self.namespace_name))
+                raise exception.InvalidShare(reason=err_msg)
+
+        if 'CIFS' in self.share_proto:
+            result = self.helper.query_cifs_share_information(self.account_id)
+            for cifs_share in result:
+                if self.share_path == cifs_share.get('share_path'):
+                    self.cifs_share_id = cifs_share.get('id')
+                    break
+            else:
+                err_msg = _("Cannot get CIFS share id(namespace_name:{0}).".format(self.namespace_name))
+                raise exception.InvalidShare(reason=err_msg)
+
+    def _update_access_for_share(self, access_rules, add_rules, delete_rules):
+        """根据传入的参数为共享添加或者移除权限"""
+
+        if add_rules:
+            self._classify_rules(add_rules, 'allow')
+        if delete_rules:
+            self._classify_rules(delete_rules, 'deny')
+        if not (add_rules or delete_rules):
+            self._clear_access()
+            self._classify_rules(access_rules, 'allow')
