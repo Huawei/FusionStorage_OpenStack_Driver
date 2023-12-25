@@ -810,6 +810,9 @@ class RestHelper:
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Delete dtree of namespace success.(dtree_name: {0},"
                        " namespace_name: {1})".format(dtree_name, namespace_name)))
+        elif result.get('result', {}).get('code') == constants.NAMESPACE_NOT_EXIST:
+            LOG.info(_("the dtree {0} of namespace {1} does not exist.(dtree_name: {0}, "
+                       " namespace_name: {1})".format(dtree_name, namespace_name)))
         else:
             err_msg = _("Delete dtree of namespace failed.(dtree_name: {0}, "
                         "namespace_name: {1})".format(dtree_name, namespace_name))
