@@ -276,7 +276,7 @@ class CustomizationOperate(OperateShare):
             result = self.helper.create_dtree(self.dtree_name, self.namespace_name)
             self.dtree_id = result.get('id')
         except Exception as e:
-            self._rollback_creat(1)
+            self._rollback_dtree_creat(1)
             raise e
 
     def _create_dtree_quota(self):
@@ -287,7 +287,7 @@ class CustomizationOperate(OperateShare):
             self.helper.creat_quota(self.dtree_id, quota_size,
                                     constants.QUOTA_PARENT_TYPE_DTREE)
         except Exception as e:
-            self._rollback_creat(1)
+            self._rollback_dtree_creat(1)
             raise e
 
     def _create_dtree_share_protocol(self):
@@ -301,10 +301,10 @@ class CustomizationOperate(OperateShare):
                 self.helper.create_dtree_cifs_share(
                     self.namespace_name, self.dtree_name, self.account_id)
         except Exception as e:
-            self._rollback_creat(2)
+            self._rollback_dtree_creat(2)
             raise e
 
-    def _rollback_creat(self, level):
+    def _rollback_dtree_creat(self, level):
         """当创建dtree过程中出现error，需要将前面已创建的对象清理掉"""
 
         LOG.error(_("Try to rollback..."))
