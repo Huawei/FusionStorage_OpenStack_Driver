@@ -80,7 +80,7 @@ class CustomizationOperate(OperateShare):
         account_name = self._find_account_name(root)
         result = self.helper.query_account_by_name(account_name)
         self.account_id = result.get('id')
-        self._get_parent_name_from_export_locations()
+        self._get_namespace_name_for_qos()
 
         qos_name = self.namespace_name
         qos_info = self.helper.query_qos_info_by_name(qos_name)
@@ -92,7 +92,7 @@ class CustomizationOperate(OperateShare):
     def parse_cmcc_qos_options(self):
         """苏研定制接口，查询share相关的qos 信息"""
 
-        self._get_parent_name_from_export_locations()
+        self._get_namespace_name_for_qos()
         result = self.helper.query_qos_info_by_name(self.namespace_name)
         if not result.get("data"):
             return {}
@@ -195,13 +195,10 @@ class CustomizationOperate(OperateShare):
             raise e
 
     def _get_parent_name_from_export_locations(self):
-        """二级目录场景下需要同时获取命名空间和dtree的名称"""
+        """二级目录场景下获取namespace名称的方式有差异"""
 
-        export_locations = self.share.get('export_locations')[0].get('path')
-        if self.share_parent_id:
-            self.namespace_name = export_locations.split('\\')[-1].split('/')[-2]
-        else:
-            self.namespace_name = export_locations.split('\\')[-1].split('/')[-1]
+        export_location = self.share.get('export_locations')[0].get('path')
+        self._get_namespace_name_from_location(export_location)
 
     def _find_account_name(self, root=None):
         LOG.info("Get account name from xml.")
@@ -219,7 +216,7 @@ class CustomizationOperate(OperateShare):
     def _get_update_qos_config(self, qos_specs):
         tmp_max_band_width = str(qos_specs.get('total_bytes_sec'))
         if (tmp_max_band_width.strip().isdigit()
-                and 1 <= int(int(tmp_max_band_width.strip()) / constants.BYTE_TO_MB)
+                and 0 <= int(int(tmp_max_band_width.strip()) / constants.BYTE_TO_MB)
                       <= constants.BAND_WIDTH_UPPER_LIMIT):
             self.qos_config['max_band_width'] = int(int(tmp_max_band_width.strip()) / constants.BYTE_TO_MB)
 
@@ -394,6 +391,28 @@ class CustomizationOperate(OperateShare):
             "avail_space": str(hard_limit - used_space)
         }
         return share_capacity
+
+    def _get_namespace_name_for_qos(self):
+        """
+        the share param of update_qos and parse_cmcc_qos_options
+        is different from other interface
+        """
+        export_location = self.share.get('export_locations')[0]
+        self._get_namespace_name_from_location(export_location)
+
+    def _get_namespace_name_from_location(self, export_location):
+        """
+        when share_parent_id is exist, export_location like this:
+        nfs_share: NFS:fake_logic_ip:/namespace_name/dtree_name
+        cifs_share: CIFS:\\\\fake_logic_ip\\namespace_name/dtree_name
+        else, export_location like this:
+        nfs_share: NFS:fake_logic_ip:/namespace_name
+        cifs_share: CIFS:\\\\fake_logic_ip\\namespace_name
+        """
+        if self.share_parent_id:
+            self.namespace_name = export_location.split('\\')[-1].split('/')[-2]
+        else:
+            self.namespace_name = export_location.split('\\')[-1].split('/')[-1]
 
 
 class CustomizationChangeAccess(ChangeAccess):
