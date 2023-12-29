@@ -76,3 +76,23 @@ class DriverForPlatform(object):
             self._raise_exception(msg)
 
         self.client.modify_qos(qos_name, new_qos)
+
+    def rollback_snapshot(self, volume, snapshot):
+        """
+        Unified customization interface for
+        Baidu Cloud Platform to rollback snapshot
+
+        params:
+        snapshot: Snapshot object to roll back
+        volume: Volume object to be rolled back
+
+        If a volume expand after a snapshot is created,
+        the volume size is inconsistent with the snapshot size.
+        In this case, snapshot rollback is not supported.
+        """
+        LOG.info("Begin to revert volume %s to snapshot %s", volume.id, snapshot.id)
+        if snapshot.volume_size != volume.size:
+            msg = "The volume size must be equal to the snapshot size."
+            LOG.error(msg)
+            self._raise_exception(msg)
+        self.revert_to_snapshot(None, volume, snapshot)

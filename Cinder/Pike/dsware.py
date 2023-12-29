@@ -127,7 +127,7 @@ CONF.register_opts(volume_opts)
 @interface.volumedriver
 class DSWAREBaseDriver(customization_driver.DriverForPlatform,
                        driver.VolumeDriver):
-    VERSION = "2.6.2"
+    VERSION = "2.6.3"
     CI_WIKI_NAME = 'Huawei_FusionStorage_CI'
 
     def __init__(self, *args, **kwargs):
@@ -232,6 +232,7 @@ class DSWAREBaseDriver(customization_driver.DriverForPlatform,
             'max_over_subscription_ratio':
                 self.configuration.max_over_subscription_ratio,
             "reserved_percentage": self.configuration.safe_get('reserved_percentage'),
+            "support_extend_with_snapshot": True,
         })
         return status
 
@@ -321,6 +322,14 @@ class DSWAREBaseDriver(customization_driver.DriverForPlatform,
             self.client.delete_volume(vol_name=vol_name)
             raise
 
+    @staticmethod
+    def _set_volume_lun_wwn(result, volume):
+        if result:
+            metadata = fs_utils.get_volume_metadata(volume)
+            metadata['lun_wwn'] = result.get('wwn')
+            return {"metadata": metadata}
+        return {}
+
     def create_volume(self, volume):
         pool_id = self._get_pool_id(volume)
         vol_name = volume.name
@@ -331,7 +340,7 @@ class DSWAREBaseDriver(customization_driver.DriverForPlatform,
 
         self._add_qos_to_volume(volume, vol_name)
         result = self.client.query_volume_by_name(vol_name=vol_name)
-        return {"metadata": {'lun_wwn': result.get('wwn')}} if result else {}
+        return self._set_volume_lun_wwn(result, volume)
 
     def delete_volume(self, volume):
         vol_name = self._get_vol_name(volume)
@@ -462,8 +471,7 @@ class DSWAREBaseDriver(customization_driver.DriverForPlatform,
         self._add_qos_to_volume(volume, vol_name)
         self._expand_volume_when_create(vol_name, vol_size)
         result = self.client.query_volume_by_name(vol_name=vol_name)
-        return ({"metadata": {'lun_wwn': result.get('wwn')}}
-                if result else {})
+        return self._set_volume_lun_wwn(result, volume)
 
     def _create_volume_from_volume_full_clone(self, vol_name, vol_size, pool_id,
                                               src_vol_name):
@@ -515,8 +523,7 @@ class DSWAREBaseDriver(customization_driver.DriverForPlatform,
         self._add_qos_to_volume(volume, vol_name)
         self._expand_volume_when_create(vol_name, vol_size)
         result = self.client.query_volume_by_name(vol_name=vol_name)
-        return ({"metadata": {'lun_wwn': result.get('wwn')}}
-                if result else {})
+        return self._set_volume_lun_wwn(result, volume)
 
     def create_snapshot(self, snapshot):
         snapshot_name = self._get_snapshot_name(snapshot)
@@ -618,10 +625,10 @@ class DSWAREBaseDriver(customization_driver.DriverForPlatform,
         change_opts = self._check_need_changes_for_manage(volume, vol_name)
         self._change_lun(vol_name, change_opts.get("new_opts"),
                          change_opts.get("old_opts"))
-        meta_data = {'lun_wwn': vol_info.get('wwn')}
+        volume_result = self._set_volume_lun_wwn(vol_info, volume)
         provider_location = {"name": vol_name}
-        return {"metadata": meta_data,
-                'provider_location': json.dumps(provider_location)}
+        volume_result['provider_location'] = json.dumps(provider_location)
+        return volume_result
 
     def manage_existing_get_size(self, volume, existing_ref):
         pool = self._get_pool_id(volume)

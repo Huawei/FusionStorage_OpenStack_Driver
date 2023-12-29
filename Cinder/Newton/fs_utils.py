@@ -766,3 +766,13 @@ def encode_name(my_uuid):
     encoded_name = hashlib.md5(my_uuid.encode('utf-8')).hexdigest()
     target_lun_prefix = my_uuid.split('-')[0] + '-'
     return target_lun_prefix + encoded_name
+
+
+def get_volume_metadata(volume):
+    if isinstance(volume, objects.Volume):
+        return volume.metadata
+    volume_metadata = volume.get('volume_metadata', [])
+    result_data = {}
+    for item in volume_metadata:
+        result_data[item.get('key')] = item.get('value')
+    return result_data
