@@ -382,8 +382,8 @@ class CustomizationOperate(OperateShare):
             LOG.error(err_msg)
             raise exception.InvalidShare(reason=err_msg)
 
-        hard_limit = self.share.get("size")
-        used_space = share_data.get("space_used") / constants.CAPACITY_UNIT_KB_TO_GB
+        hard_limit = int(self.share.get("size")) * constants.CAPACITY_UNIT_BYTE_TO_GB
+        used_space = int(share_data.get("space_used")) * constants.CAPACITY_UNIT_BYTE_TO_KB
 
         share_capacity = {
             "hard_limit": str(hard_limit),
