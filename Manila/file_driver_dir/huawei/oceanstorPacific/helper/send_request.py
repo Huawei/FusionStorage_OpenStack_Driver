@@ -25,7 +25,7 @@ class SendRequest:
         self.url = None
         self.cookie = None
 
-    def call(self, url=None, data=None, method=None, ex_url=None):
+    def call(self, url=None, data=None, method=None, ex_url=None, log_call=True):
         """Send requests to server.if fail, try another RestURL."""
 
         result = None
@@ -48,7 +48,7 @@ class SendRequest:
                     LOG.warning(msg)
                     continue
 
-            result = self._do_call(url, data, method, ex_url)
+            result = self._do_call(url, data, method, ex_url, log_call)
             if self._check_error_code(ex_url, result):
                 break
             else:
@@ -74,11 +74,11 @@ class SendRequest:
              "scope": "0"})
         result = self._do_call(url, data, log_call=False)
 
-        if not result or (result['result']['code'] != 0) or ("data" not in result):
+        if not result or (result.get('result', {}).get('code') != 0) or ("data" not in result):
             err_msg = ("Login to {0} failed. Result: {1}.".format(self.url + url, result))
             raise exception.InvalidHost(reason=err_msg)
 
-        self.headers['x-auth-token'] = result['data']['x_auth_token']
+        self.headers['x-auth-token'] = result.get('data', {}).get('x_auth_token')
         LOG.info("login success for url:{0}.\n".format(self.url))
 
     def _do_call(self, url, data=None, method=None, ex_url=None, log_call=True):
@@ -101,16 +101,16 @@ class SendRequest:
                 req.get_method = get_method
             res_temp = urlreq.urlopen(req, timeout=constants.SOCKET_TIMEOUT)
             res = res_temp.read().decode("utf-8")
+            result = jsonutils.loads(res, encoding='utf-8')
             if log_call:
                 LOG.info("The url is: {url}, "
                          "The method is {method}, "
                          "Request Data is {data}, "
-                         "Response is {res}".format(url=url, method=method, data=data, res=res))
+                         "Response is {res}".format(url=url, method=method, data=data, res=result))
         except Exception as e:
             LOG.error(_("Bad response from server: {0}. Error: {1}".format(url, e)))
-            res = '{"result":{"code":-1, "description": "Connect server error"} }'
+            result = {"result": {"code": -1, "description": "Connect server error"}}
 
-        result = jsonutils.loads(res)
         return result
 
     def _get_login_info(self):

@@ -27,6 +27,7 @@ SUYAN_NAS_DRIVER = ("manila.share.drivers.huawei.oceanstorPacific.customization_
 
 class HuaweiNasDriverForSuyan(HuaweiNasDriver):
     """Huawei Oceanstor Pacific Share Driver for Suyan cloud. """
+
     @staticmethod
     def _get_backend_driver_class(backend_key=None):
         """重新定向苏研定制化 插件路径"""
