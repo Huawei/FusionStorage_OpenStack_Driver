@@ -13,6 +13,7 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
+import math
 
 from oslo_log import log
 
@@ -60,10 +61,9 @@ class CustomizationOperate(OperateShare):
             err_msg = _("share fail for invalid export location.")
             raise exception.InvalidShare(reason=err_msg)
 
-        namespace_info = self._get_dtree_namespace_info()
         self._get_dtree_info()
-        self._get_quota_info(namespace_info, action, self.dtree_id,
-                             new_size, constants.QUOTA_PARENT_TYPE_DTREE)
+        self._get_dtree_quota_info(action, self.dtree_id,
+                                   new_size, constants.QUOTA_PARENT_TYPE_DTREE)
         self.helper.change_quota_size(self.quota_id, new_size)
         LOG.info("{0} share done. New size:{1}.".format(action, new_size))
         return True
@@ -367,23 +367,23 @@ class CustomizationOperate(OperateShare):
         return False
 
     def _get_share_capacity(self, share_usages):
-        namespace_info = share_usages.get(self.namespace_name)
-        if not namespace_info:
+        if self.share_parent_id:
+            share_info = share_usages.get(self.dtree_name)
+        else:
+            share_info = share_usages.get(self.namespace_name)
+
+        if not share_info:
             return {}
 
-        return self._check_and_get_share_capacity(namespace_info)
+        return self._check_and_get_share_capacity(share_info)
 
-    def _check_and_get_share_capacity(self, share_data):
-        if share_data.get("name") != self.namespace_name:
-            return {}
-
+    @staticmethod
+    def _check_and_get_share_capacity(share_data):
         if share_data.get("space_used") is None:
-            err_msg = _("Can not get share data, the share data is {0}".format(share_data))
-            LOG.error(err_msg)
-            raise exception.InvalidShare(reason=err_msg)
+            return {}
 
-        hard_limit = int(self.share.get("size")) * constants.CAPACITY_UNIT_BYTE_TO_GB
-        used_space = int(share_data.get("space_used")) * constants.CAPACITY_UNIT_BYTE_TO_KB
+        hard_limit = int(share_data.get("space_hard_quota"))
+        used_space = int(share_data.get("space_used"))
 
         share_capacity = {
             "hard_limit": str(hard_limit),
@@ -411,8 +411,21 @@ class CustomizationOperate(OperateShare):
         """
         if self.share_parent_id:
             self.namespace_name = export_location.split('\\')[-1].split('/')[-2]
+            self.dtree_name = export_location.split('\\')[-1].split('/')[-1]
         else:
             self.namespace_name = export_location.split('\\')[-1].split('/')[-1]
+
+    def _get_dtree_quota_info(self, action, parent_id, new_size, parent_type):
+        dtree_quota = self.helper.query_quota_by_parent(parent_id, parent_type)
+        cur_size = float(dtree_quota.get('space_used', 0.0)) / constants.CAPACITY_UNIT_BYTE_TO_GB
+        cur_size = math.ceil(cur_size)
+
+        self.quota_id = dtree_quota.get('id')
+
+        action = action.title()
+        if (action == 'Shrink') and (cur_size > new_size):
+            err_msg = (_("Shrink share fail for space used({0}G) > new sizre({1}G)".format(cur_size, new_size)))
+            raise exception.InvalidInput(reason=err_msg)
 
 
 class CustomizationChangeAccess(ChangeAccess):
@@ -481,19 +494,42 @@ class CustomizationChangeCheckUpdateStorage(CheckUpdateStorage):
         super(CustomizationChangeCheckUpdateStorage, self).__init__(helper, root)
         self.account_id = None
 
-    @staticmethod
-    def _get_all_share_usages(all_namespace_info):
-        """将所有的命名空间信息和其名称组成键值对"""
+    def _get_all_share_usages(self, all_namespace_info):
+        """
+        1. 将所有的命名空间信息和其名称组成键值对
+        2. 通过命名空间名称获取它所有的dtree信息
+        3. 根据dtree信息获取配额信息
+        """
 
         all_share_usages = {}
         for namespace in all_namespace_info:
-            all_share_usages[namespace.get('name')] = namespace
+            all_share_usages[namespace.get('name')] = {
+                'id': namespace.get('id'),
+                'name': namespace.get('name'),
+                'space_used': namespace.get(
+                    'space_used', 0.0) * constants.CAPACITY_UNIT_BYTE_TO_KB,
+                'space_hard_quota': namespace.get(
+                    'space_hard_quota', 0.0) * constants.CAPACITY_UNIT_BYTE_TO_KB
+            }
+            all_dtree_info = self.helper.get_all_dtree_info_of_namespace(namespace.get('id'))
+            for dtree_info in all_dtree_info:
+                dtree_quota = self.helper.query_quota_by_parent(
+                    dtree_info.get('id'), constants.QUOTA_PARENT_TYPE_DTREE)
+                dtree_info['spaced_used'] = dtree_quota.get('space_used', 0.0)
+                dtree_info['space_hard_quota'] = dtree_quota.get('space_hard_quota', 0.0)
+                all_share_usages[dtree_info.get('name')] = {
+                    'id': dtree_info.get('id'),
+                    'name': dtree_info.get('name'),
+                    'space_used': dtree_quota.get('space_used', 0.0),
+                    'space_hard_quota': dtree_quota.get('space_hard_quota', 0.0)
+                }
 
+        LOG.info("successfully get all share usages")
         return all_share_usages
 
     def get_all_share_usage(self):
         """苏研定制接口，获取对应帐户下所有的share信息"""
-
+        LOG.info("begin to query all share usages")
         self._find_account_id()
         all_namespace_info = self.helper.get_all_namespace_info(self.account_id)
         return self._get_all_share_usages(all_namespace_info)

@@ -28,6 +28,10 @@ class OceanStorPacificStorageConnectionForSuyan(OceanStorPacificStorageConnectio
     添加上对接苏研云平台需要的定制接口
     """
 
+    def __init__(self, root):
+        super(OceanStorPacificStorageConnectionForSuyan, self).__init__(root)
+        self.querying = False
+
     def create_share(self, context, share, share_server):
         """苏研qos为定制的参数，所以此处重写qos相关解析方法"""
         location = driver_api.CustomizationOperate(self.helper, share).create_share(self.root, self.free_pool)
@@ -52,8 +56,14 @@ class OceanStorPacificStorageConnectionForSuyan(OceanStorPacificStorageConnectio
 
     def get_all_share_usage(self):
         """苏研定制接口，获取所有的share信息 返回存储上所有的share"""
-        all_share_usages = driver_api.CustomizationChangeCheckUpdateStorage(
-            self.helper, self.root).get_all_share_usage()
+        if self.querying:
+            return {}
+        self.querying = True
+        try:
+            all_share_usages = driver_api.CustomizationChangeCheckUpdateStorage(
+                self.helper, self.root).get_all_share_usage()
+        finally:
+            self.querying = False
         return all_share_usages
 
     def get_share_usage(self, share, share_usages):

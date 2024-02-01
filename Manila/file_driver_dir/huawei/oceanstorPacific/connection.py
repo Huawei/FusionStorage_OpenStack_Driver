@@ -24,7 +24,7 @@ from . import driver_api, helper
 LOG = log.getLogger(__name__)
 
 
-class OceanStorPacificStorageConnection:
+class OceanStorPacificStorageConnection(object):
     """
     OceanStorPacificStorageConnection class for Huawei OceanStorPacific storage system.
     采用门面模式，由 connection类 统一提供 oceanstorPacific_nas.py所需要的接口调用。
