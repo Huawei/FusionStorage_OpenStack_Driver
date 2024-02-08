@@ -46,6 +46,7 @@ class HuaweiNasDriver(driver.ShareDriver):
         LOG.info("Enter into init function.")
         super(HuaweiNasDriver, self).__init__(False, *args, **kwargs)
         self.configuration = kwargs.get('configuration', None)
+        self.ipv6_implemented = True
         if self.configuration:
             self.configuration.append_config_values(huawei_opts)
             backend_driver, root = self._get_backend_driver()
@@ -119,9 +120,16 @@ class HuaweiNasDriver(driver.ShareDriver):
             qos=True,
             snapshot_support=False,
             total_capacity_gb=0.0,
-            free_capacity_gb=0.0)
+            free_capacity_gb=0.0,
+            ipv6_support=True)
         self.plugin.update_share_stats(data)
         super(HuaweiNasDriver, self)._update_share_stats(data)
+
+    def get_configured_ip_versions(self):
+        return self.get_configured_ip_version()
+
+    def get_configured_ip_version(self):
+        return [4, 6] if self.ipv6_implemented else [4]
 
     def create_share(self, context, share, share_server=None):
         """Create a share."""

@@ -82,12 +82,8 @@ class ChangeAccess(object):
     def _deal_access_for_nfs(self, action):
         if action == 'allow':
             for access in self.nfs_rules:
-                access_to = access['access_to']
-                access_level = access['access_level']
-
-                if not self._check_ip_valid(access_to):
-                    message = _('The access_to is invalid.')
-                    raise exception.InvalidInput(reason=message)
+                access_to = self.standard_ipaddr(access.get('access_to'))
+                access_level = access.get('access_level')
 
                 if access_level not in common_constants.ACCESS_LEVELS:
                     err_msg = _('Unsupported level of access was provided - {0}'.format(access_level))
@@ -99,13 +95,11 @@ class ChangeAccess(object):
             nfs_share_clients = {}
             result = self.helper.query_nfs_share_clients_information(self.nfs_share_id, self.account_id)
             for data in result:
-                nfs_share_clients[data['access_name']] = data['id']
+                access_name = self.standard_ipaddr(data.get('access_name'))
+                nfs_share_clients[access_name] = data.get('id')
 
             for access in self.nfs_rules:
-                access_to = access['access_to']
-                if not self._check_ip_valid(access_to):
-                    LOG.warning(_('The access_to is invalid, ignored.'))
-                    continue
+                access_to = self.standard_ipaddr(access.get('access_to'))
 
                 if access_to in nfs_share_clients:
                     self.helper.deny_access_for_nfs(nfs_share_clients[access_to], self.account_id)
@@ -116,8 +110,8 @@ class ChangeAccess(object):
         if action == 'allow':
             for access in self.cifs_rules:
 
-                access_to = access['access_to']
-                access_level = access['access_level']
+                access_to = access.get('access_to')
+                access_level = access.get('access_level')
 
                 if access_level not in common_constants.ACCESS_LEVELS:
                     err_msg = _('Unsupported level of access was provided - {0}'.format(access_level))
@@ -128,10 +122,10 @@ class ChangeAccess(object):
             cifs_share_clients = {}
             result = self.helper.query_cifs_share_user_information(self.cifs_share_id, self.account_id)
             for data in result:
-                cifs_share_clients[data['name']] = data['id']
+                cifs_share_clients[data.get('name')] = data.get('id')
 
             for access in self.cifs_rules:
-                access_to = access['access_to']
+                access_to = access.get('access_to')
                 if access_to in cifs_share_clients:
                     self.helper.deny_access_for_cifs(cifs_share_clients[access_to], self.account_id)
                 else:
@@ -142,62 +136,24 @@ class ChangeAccess(object):
         if 'NFS' in self.share_proto:
             result = self.helper.query_nfs_share_clients_information(self.nfs_share_id, self.account_id)
             for data in result:
-                self.helper.deny_access_for_nfs(data['id'], self.account_id)
+                self.helper.deny_access_for_nfs(data.get('id'), self.account_id)
         if self.share_proto == 'CIFS':
             result = self.helper.query_cifs_share_user_information(self.cifs_share_id, self.account_id)
             for data in result:
-                self.helper.deny_access_for_cifs(data['id'], self.account_id)
+                self.helper.deny_access_for_cifs(data.get('id'), self.account_id)
 
     @staticmethod
-    def _check_ip_valid(ip):
+    def standard_ipaddr(access):
         """
-        rules for IP address authorization scenarios:
-        1. only supports one IPv4 address or address segment.
-        2. when IP is address segment, format is "ip/mask", the range of
-           subnet mask is [1, 31], but 0.0.0.0/0 is special,
-           0.0.0.0/0 is allowed.
-        3. the follow ip or ip address segment is not allowed:
-           0.*.*.*, 0.*.*.*/*, 127.*.*.*, 127.*.*.*/*,
-           224~255.*.*.*, 224~255.*.*.*/*
-
-           :param ip: ip or ip segment
-           :return: True is ip valid, else False
+        When the added client permission is an IP address,
+        standardize it. Otherwise, do not process it.
         """
-        if ip == "0.0.0.0/0":
-            return True
-
-        ip_set = ip.split("/")
-        ip_set_len = len(ip_set)
-        if ip_set_len == 2:
-            ip = ip_set[0]
-            subnet_mask = ip_set[1]
-        elif ip_set_len == 1:
-            ip = ip_set[0]
-            subnet_mask = ""
-        else:
-            return False
-
-        if ip_set_len == 2:
-            if subnet_mask == "" or not subnet_mask.isdigit():
-                return False
-
-            if int(subnet_mask) < 1 or int(subnet_mask) > 31:
-                return False
-
-        if len(ip.split(".")) != 4:
-            return False
-
-        # note: netaddr.valid_ipv4() method not valid num of ip, which means
-        # 1.1.1 is valid for valid_ipv4() method
-        if not netaddr.valid_ipv4(ip):
-            return False
-
-        ip_1st_colum = int(ip.split(".")[0])
-        ip_not_allowed_address_segment = (224 <= ip_1st_colum <= 255)
-        if ip_1st_colum == 0 or ip_1st_colum == 127 or ip_not_allowed_address_segment:
-            return False
-
-        return True
+        try:
+            format_ip = netaddr.IPAddress(access)
+            access_to = str(format_ip.format(dialect=netaddr.ipv6_compact))
+            return access_to
+        except Exception:
+            return access
 
     def _get_export_location_info(self):
         """校验share是否包含path信息，有则初始化"""
