@@ -113,7 +113,8 @@ class CheckUpdateStorage(object):
                     reserved_percentage=reserved_percentage,
                     max_over_subscription_ratio=max_over_subscription_ratio,
                     dedupe=False,
-                    thin_provisioning=True
+                    thin_provisioning=True,
+                    ipv6_support=True
                 )
                 data["pools"].append(pool)
 

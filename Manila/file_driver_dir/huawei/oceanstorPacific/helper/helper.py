@@ -202,7 +202,7 @@ class RestHelper:
         query_para = {
             "parent_type": parent_type,
             "parent_id": parent_id,
-            "space_unit_type": constants.QUOTA_UNIT_TYPE_GB,
+            "space_unit_type": constants.QUOTA_UNIT_TYPE_BYTES,
             "range": "{\"offset\": 0, \"limit\": 10}"
         }
         data = jsonutils.dumps(query_para)
