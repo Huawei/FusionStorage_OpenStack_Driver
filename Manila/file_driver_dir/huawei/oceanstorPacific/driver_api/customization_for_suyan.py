@@ -57,10 +57,12 @@ class CustomizationOperate(OperateShare):
         if not self.share_parent_id:
             return super(CustomizationOperate, self).change_share(new_size, action)
 
-        if not self.share.get('export_locations') or not self.share.get('export_locations')[0].get('path'):
-            err_msg = _("share fail for invalid export location.")
+        if (not self.share.get('export_locations') or not self.share.get(
+                'export_locations')[0].get('path')):
+            err_msg = _("change share fail for invalid export location.")
             raise exception.InvalidShare(reason=err_msg)
 
+        self._get_dtree_namespace_info()
         self._get_dtree_info()
         self._get_dtree_quota_info(action, self.dtree_id,
                                    new_size, constants.QUOTA_PARENT_TYPE_DTREE)
@@ -70,12 +72,12 @@ class CustomizationOperate(OperateShare):
 
     def update_qos(self, qos_specs, root):
         """苏研定制接口，根据传递的qos_specs，刷新share的qos信息，如果没有则创建对应qos"""
+        if (not self.share.get('export_locations') or not self.share.get(
+                'export_locations')[0].get('path')):
+            err_msg = _("update share qos fail for invalid export location.")
+            raise exception.InvalidShare(reason=err_msg)
 
         self._get_update_qos_config(qos_specs)
-        if not self.qos_config:
-            err_msg = "Can not get qos config when update_qos, the qos_specs is {0}".format(qos_specs)
-            LOG.error(err_msg)
-            raise exception.InvalidShare(reason=err_msg)
 
         account_name = self._find_account_name(root)
         result = self.helper.query_account_by_name(account_name)
@@ -90,24 +92,18 @@ class CustomizationOperate(OperateShare):
             self._update_qos(qos_name)
 
     def parse_cmcc_qos_options(self):
-        """苏研定制接口，查询share相关的qos 信息"""
-
-        self._get_namespace_name_for_qos()
-        result = self.helper.query_qos_info_by_name(self.namespace_name)
-        if not result.get("data"):
-            return {}
-        qos_info = result.get("data", {})
-
+        """苏研定制接口，解冻前需要先获取要恢复的qos信息"""
         share_qos_info = {
-            "total_bytes_sec": qos_info.get("max_mbps", 0) * constants.BYTE_TO_MB,
-            "total_iops_sec": qos_info.get("max_iops", 0)
+            "total_bytes_sec": 0,
+            "total_iops_sec": 0
         }
         return share_qos_info
 
     def get_share_usage(self, share_usages):
         """苏研定制接口，通过share_usages获取对应share的容量信息"""
 
-        if not self.share.get('export_locations') or not self.share.get('export_locations')[0].get('path'):
+        if (not self.share.get('export_locations') or not self.share.get(
+                'export_locations')[0].get('path')):
             err_msg = _("Get namespace_name fail for invalid export location.")
             LOG.error(err_msg)
             raise exception.InvalidShare(reason=err_msg)
@@ -120,7 +116,8 @@ class CustomizationOperate(OperateShare):
         if not self.share_parent_id:
             return super(CustomizationOperate, self).delete_share()
 
-        if not self.share.get('export_locations') or not self.share.get('export_locations')[0].get('path'):
+        if (not self.share.get('export_locations') or not self.share.get(
+                'export_locations')[0].get('path')):
             LOG.warn(_("Delete share fail for invalid export location."))
             return False
 
@@ -138,8 +135,9 @@ class CustomizationOperate(OperateShare):
         if not self.share_parent_id:
             return super(CustomizationOperate, self).ensure_share()
 
-        if not self.share.get('export_locations') or not self.share.get('export_locations')[0].get('path'):
-            err_msg = _(" share fail for invalid export location.")
+        if (not self.share.get('export_locations') or not self.share.get(
+                'export_locations')[0].get('path')):
+            err_msg = _("Ensure share fail for invalid export location.")
             raise exception.InvalidShare(reason=err_msg)
 
         result = self._get_dtree_namespace_info()
@@ -158,12 +156,13 @@ class CustomizationOperate(OperateShare):
         if tmp_max_band_width is None:
             self.qos_config['max_band_width'] = constants.MAX_BAND_WIDTH
         elif (tmp_max_band_width.strip().isdigit()
-                and 1 <= int(int(tmp_max_band_width.strip()) / constants.BYTE_TO_MB)
+                and 0 <= int(int(tmp_max_band_width.strip()) / constants.BYTE_TO_MB)
                       <= constants.BAND_WIDTH_UPPER_LIMIT):
-            self.qos_config['max_band_width'] = int(int(tmp_max_band_width.strip()) / constants.BYTE_TO_MB)
+            self.qos_config['max_band_width'] = int(math.ceil(float(
+                tmp_max_band_width.strip()) / constants.BYTE_TO_MB))
         else:
             err_msg = _("The total_bytes_sec in share type "
-                        "must be int([1, %s]).") % constants.BAND_WIDTH_UPPER_LIMIT
+                        "must be int([0, %s]).") % constants.BAND_WIDTH_UPPER_LIMIT
             raise exception.InvalidInput(reason=err_msg)
 
     def _get_max_iops_qos_config(self, extra_specs):
@@ -214,14 +213,28 @@ class CustomizationOperate(OperateShare):
         return account_name
 
     def _get_update_qos_config(self, qos_specs):
+        if not (qos_specs.get('total_bytes_sec') and
+                qos_specs.get('total_iops_sec')):
+            err_msg = "Can not get qos config when update_qos," \
+                      "total_bytes_sec and total_iops_sec must need to be " \
+                      "set when update qos" \
+                      " the qos_specs is {0}".format(qos_specs)
+            LOG.error(err_msg)
+            raise exception.InvalidShare(reason=err_msg)
+
         tmp_max_band_width = str(qos_specs.get('total_bytes_sec'))
-        if (tmp_max_band_width.strip().isdigit()
+        if int(tmp_max_band_width) == 0:
+            self.qos_config['max_band_width'] = constants.MAX_BAND_WIDTH
+        elif (tmp_max_band_width.strip().isdigit()
                 and 0 <= int(int(tmp_max_band_width.strip()) / constants.BYTE_TO_MB)
                       <= constants.BAND_WIDTH_UPPER_LIMIT):
-            self.qos_config['max_band_width'] = int(int(tmp_max_band_width.strip()) / constants.BYTE_TO_MB)
+            self.qos_config['max_band_width'] = int(math.ceil(float(
+                tmp_max_band_width.strip()) / constants.BYTE_TO_MB))
 
         tmp_max_iops = str(qos_specs.get('total_iops_sec'))
-        if tmp_max_iops.strip().isdigit() \
+        if int(tmp_max_iops) == 0:
+            self.qos_config['max_iops'] = constants.MAX_IOPS
+        elif tmp_max_iops.strip().isdigit() \
                 and 0 <= int(tmp_max_iops.strip()) <= constants.MAX_IOPS_UPPER_LIMIT:
             self.qos_config['max_iops'] = int(tmp_max_iops.strip())
 
@@ -358,6 +371,7 @@ class CustomizationOperate(OperateShare):
     def _get_dtree_info(self):
         """二级目录场景下，通过location获取dtree名称后再去获取dtree信息"""
 
+        self.export_locations = self.share.get('export_locations')[0].get('path')
         self.dtree_name = self.export_locations.split('\\')[-1].split('/')[-1]
         result = self.helper.query_dtree_by_name(self.dtree_name, self.namespace_id)
         for dtree_info in result:
@@ -397,7 +411,7 @@ class CustomizationOperate(OperateShare):
         the share param of update_qos and parse_cmcc_qos_options
         is different from other interface
         """
-        export_location = self.share.get('export_locations')[0]
+        export_location = self.share.get('export_locations')[0].get('path')
         self._get_namespace_name_from_location(export_location)
 
     def _get_namespace_name_from_location(self, export_location):
