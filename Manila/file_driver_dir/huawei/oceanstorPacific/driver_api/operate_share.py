@@ -63,8 +63,9 @@ class OperateShare(object):
         return self._get_location()
 
     def delete_share(self):
-        if not self.share.get('export_locations') or not self.share.get('export_locations')[0].get('path'):
-            LOG.warn(_(" share fail for invalid export location."))
+        if (not self.share.get('export_locations') or not self.share.get(
+                'export_locations')[0].get('path')):
+            LOG.warn(_("Delete share fail for invalid export location."))
             return False
 
         self._get_account_id()
@@ -76,8 +77,9 @@ class OperateShare(object):
         return True
 
     def ensure_share(self):
-        if not self.share.get('export_locations') or not self.share.get('export_locations')[0].get('path'):
-            err_msg = _(" share fail for invalid export location.")
+        if (not self.share.get('export_locations') or not self.share.get(
+                'export_locations')[0].get('path')):
+            err_msg = _("Ensure share fail for invalid export location.")
             raise exception.InvalidShare(reason=err_msg)
 
         result = self._get_namespace_info()
@@ -86,8 +88,9 @@ class OperateShare(object):
 
     def change_share(self, new_size, action):
 
-        if not self.share.get('export_locations') or not self.share.get('export_locations')[0].get('path'):
-            err_msg = _("share fail for invalid export location.")
+        if (not self.share.get('export_locations') or not self.share.get(
+                'export_locations')[0].get('path')):
+            err_msg = _("Change share fail for invalid export location.")
             raise exception.InvalidShare(reason=err_msg)
 
         namespace_info = self._get_namespace_info()

@@ -158,7 +158,8 @@ class ChangeAccess(object):
     def _get_export_location_info(self):
         """校验share是否包含path信息，有则初始化"""
 
-        if not self.share.get('export_locations') or not self.share.get('export_locations')[0].get('path'):
+        if (not self.share.get('export_locations') or not self.share.get(
+                'export_locations')[0].get('path')):
             err_msg = _("share fail for invalid export location.")
             raise exception.InvalidShare(reason=err_msg)
         self.export_locations = self.share.get('export_locations')[0].get('path')
