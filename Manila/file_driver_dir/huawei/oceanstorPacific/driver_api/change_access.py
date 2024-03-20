@@ -32,6 +32,7 @@ class ChangeAccess(object):
 
         self.account_id = None
         self.namespace_name = None
+        self.namespace_id = None
         self.share_proto = self.share.get('share_proto', '').split('&')
         self.share_path = None
         self.export_locations = None  # share路径信息
@@ -39,6 +40,7 @@ class ChangeAccess(object):
         self.cifs_share_id = None
         self.nfs_rules = []
         self.cifs_rules = []
+        self.dpc_rules = []
 
     def update_access(self, access_rules, add_rules, delete_rules):
         """Update access rules list."""
@@ -74,10 +76,15 @@ class ChangeAccess(object):
             if 'CIFS' in self.share_proto and access_type == 'user':
                 self.cifs_rules.append(access)
 
+            if 'DPC' in self.share_proto and access_type == 'ip':
+                self.dpc_rules.append(access)
+
         if self.nfs_rules:
             self._deal_access_for_nfs(action)
         if self.cifs_rules:
             self._deal_access_for_cifs(action)
+        if self.dpc_rules:
+            self._deal_access_for_dpc(action)
 
     def _deal_access_for_nfs(self, action):
         if action == 'allow':
@@ -131,6 +138,28 @@ class ChangeAccess(object):
                 else:
                     LOG.info(_("The access_to {0} does not exist").format(access_to))
 
+    def _deal_access_for_dpc(self, action):
+
+        if action == 'allow':
+            LOG.info(_("Will be add dpc access.(nums: {0})".format(len(self.dpc_rules))))
+        if action == 'deny':
+            LOG.info(_("Will be delete dpc access.(nums: {0})".format(len(self.dpc_rules))))
+
+        for index in range(0, len(self.dpc_rules), 200):
+            dpc_ips = ""
+            for access in self.dpc_rules[index:index + 200]:
+                access_to = self.standard_ipaddr(access.get('access_to'))
+
+                if not dpc_ips:
+                    dpc_ips += access_to
+                else:
+                    dpc_ips += ',' + access_to
+
+            if action == "allow":
+                self.helper.allow_access_for_dpc(self.namespace_name, dpc_ips)
+            elif action == "deny":
+                self.helper.deny_access_for_dpc(self.namespace_name, dpc_ips)
+
     def _clear_access(self):
         """Remove all access rules of the share"""
         if 'NFS' in self.share_proto:
@@ -169,12 +198,15 @@ class ChangeAccess(object):
 
         self.namespace_name = self.export_locations.split('\\')[-1].split('/')[-1]
         self.share_path = '/' + self.namespace_name + '/'
+        result = self.helper.query_namespace_by_name(self.namespace_name)
+        self.namespace_id = result.get('id')
 
-    def _query_and_set_share_info(self):
+    def _query_and_set_share_info(self, dtree_id=0, dtree_name=None):
         """根据share_path信息查询对应的share信息"""
 
         if 'NFS' in self.share_proto:
-            result = self.helper.query_nfs_share_information(self.account_id)
+            result = self.helper.query_nfs_share_information(
+                self.account_id, self.namespace_id, dtree_id)
             for nfs_share in result:
                 if self.share_path == nfs_share.get('share_path'):
                     self.nfs_share_id = nfs_share.get('id')
@@ -184,7 +216,8 @@ class ChangeAccess(object):
                 raise exception.InvalidShare(reason=err_msg)
 
         if 'CIFS' in self.share_proto:
-            result = self.helper.query_cifs_share_information(self.account_id)
+            result = self.helper.query_cifs_share_information(
+                self.account_id, dtree_name if dtree_name else self.namespace_name)
             for cifs_share in result:
                 if self.share_path == cifs_share.get('share_path'):
                     self.cifs_share_id = cifs_share.get('id')

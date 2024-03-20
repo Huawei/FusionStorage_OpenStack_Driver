@@ -253,10 +253,12 @@ class OperateShare(object):
             self.namespace_name = 'share-' + self.share.get('id')
 
         try:
-            forbidden_dpc = constants.SUPPORT_DPC if 'DPC' in self.share_proto else constants.NOT_SUPPORT_DPC
+            forbidden_dpc = constants.NOT_FORBIDDEN_DPC if 'DPC' in self.share_proto else constants.FORBIDDEN_DPC
             storage_pool_id = self.free_pool[0]
             result = self.helper.create_namespace(self.namespace_name, storage_pool_id, self.account_id,
                                                   forbidden_dpc, self.tier_info['atime_mode'])
+            if not forbidden_dpc:
+                self.helper.open_dpc_auth_switch(self.namespace_name)
             self.namespace_id = result.get('id')
         except Exception as e:
             self._rollback_creat(1)
@@ -326,14 +328,15 @@ class OperateShare(object):
     def _delete_share_protocol(self):
 
         if 'NFS' in self.share_proto:
-            result = self.helper.query_nfs_share_information(self.account_id)
+            result = self.helper.query_nfs_share_information(self.account_id, self.namespace_id)
             for nfs_share in result:
                 if str(self.namespace_id) == nfs_share['file_system_id']:
                     nfs_share_id = nfs_share.get('id')
                     self.helper.delete_nfs_share(nfs_share_id, self.account_id)
                     break
         if 'CIFS' in self.share_proto:
-            result = self.helper.query_cifs_share_information(self.account_id)
+            result = self.helper.query_cifs_share_information(
+                self.account_id, self.namespace_name)
             for cifs_share in result:
                 if str(self.namespace_id) == cifs_share['file_system_id']:
                     cifs_share_id = cifs_share.get('id')

@@ -407,12 +407,18 @@ class RestHelper:
             err_msg = _("Create CIFS share failed.(namespace_name: {0})".format(namespace_name))
             raise exception.InvalidShare(reason=err_msg)
 
-    def query_nfs_share_information(self, account_id):
+    def query_nfs_share_information(self, account_id, fs_id, dtree_id=0):
         """This interface is used to batch query NFS share information."""
 
         url = "nas_protocol/nfs_share_list"
         nfs_para = {
-            'account_id': account_id
+            'account_id': account_id,
+            'filter': [
+                {
+                    'fs_id': fs_id,
+                    'dtree_id': dtree_id,
+                }
+            ]
         }
         data = jsonutils.dumps(nfs_para)
         result = self.call(url, data, "GET")
@@ -425,13 +431,18 @@ class RestHelper:
 
         return result.get('data')
 
-    def query_cifs_share_information(self, account_id):
+    def query_cifs_share_information(self, account_id, share_name):
         """This interface is used to batch query basic information about CIFS shares."""
 
         url = "file_service/cifs_share_list"
 
         cifs_para = {
-            'account_id': account_id
+            'account_id': account_id,
+            'filter': [
+                {
+                    'name': share_name
+                }
+            ]
         }
 
         data = jsonutils.dumps(cifs_para)
@@ -578,44 +589,66 @@ class RestHelper:
             raise exception.InvalidShare(reason=err_msg)
 
     def query_nfs_share_clients_information(self, share_id, account_id=None):
+        totals = self.get_total_info_by_offset(
+            self._query_nfs_share_clients_information, [share_id, account_id])
+        return totals
+
+    def _query_nfs_share_clients_information(self, offset, extra_param):
         """This interface is used to batch query NFS share client information."""
 
         url = "nas_protocol/nfs_share_auth_client_list"
         filter_para = {
-            'filter': '[{{"share_id": "{0}"}}]'.format(share_id),
-            'account_id': account_id
+            'filter': [{
+                "share_id": extra_param[0]
+            }],
+            "range": {
+                "offset": offset,
+                "limit": constants.MAX_QUERY_COUNT
+            },
+            'account_id': extra_param[1]
         }
 
         data = jsonutils.dumps(filter_para)
         result = self.call(url, data, "GET")
 
         if result.get('result', {}).get('code') == 0:
-            LOG.info(_("Query NFS share clients success.(nfs_share_id: {0})".format(share_id)))
+            LOG.info(_("Query NFS share clients success.(nfs_share_id: {0})".format(extra_param[0])))
         else:
-            err_msg = _("Query NFS share clients failed.(nfs_share_id: {0})".format(share_id))
+            err_msg = _("Query NFS share clients failed.(nfs_share_id: {0})".format(extra_param[0]))
             raise exception.InvalidShare(reason=err_msg)
 
-        return result.get('data')
+        return result
 
     def query_cifs_share_user_information(self, share_id, account_id=None):
+        totals = self.get_total_info_by_offset(
+            self._query_cifs_share_user_information, [share_id, account_id])
+        return totals
+
+    def _query_cifs_share_user_information(self, offset, extra_param):
         """This interface is used to query CIFS share users or user groups in batches."""
 
         url = "file_service/cifs_share_auth_client_list"
         filter_para = {
-            'filter': '[{{"share_id": "{0}"}}]'.format(share_id),
-            'account_id': account_id
+            'filter': [{
+                    "share_id": extra_param[0]
+                }],
+            "range": {
+                "offset": offset,
+                "limit": constants.MAX_QUERY_COUNT
+            },
+            'account_id': extra_param[1],
         }
 
         data = jsonutils.dumps(filter_para)
         result = self.call(url, data, "GET")
 
         if result.get('result', {}).get('code') == 0:
-            LOG.info(_("Query CIFS share user success.(cifs_share_id: {0})".format(share_id)))
+            LOG.info(_("Query CIFS share user success.(cifs_share_id: {0})".format(extra_param[0])))
         else:
-            err_msg = _("Query CIFS share user failed.(cifs_share_id: {0})".format(share_id))
+            err_msg = _("Query CIFS share user failed.(cifs_share_id: {0})".format(extra_param[0]))
             raise exception.InvalidShare(reason=err_msg)
 
-        return result.get('data')
+        return result
 
     def deny_access_for_nfs(self, client_id, account_id):
         """This interface is used to delete an NFS share client."""
@@ -651,6 +684,70 @@ class RestHelper:
             err_msg = "Delete the CIFS client failed.(user_id: {0})".format(user_id)
             raise exception.InvalidShare(reason=err_msg)
 
+    def open_dpc_auth_switch(self, namespace_name):
+        """	Enable or disable DPC authentication."""
+
+        url = "/dsware/service/fsmCliCmd"
+        auth_para = {
+            "namespace": namespace_name,
+            "auth_type": "DPC_AUTH_IP",
+            "switch": "DPC_AUTH_SWITCH_ON",
+            "name": "setDpcAuthSwitch",
+            "serviceType": "eds-f"
+        }
+
+        data = jsonutils.dumps(auth_para)
+        result = self.call(None, data, "POST", ex_url=url)
+        if result.get('result') == 0:
+            LOG.info(_("Open DPC Auth switch success.(namespace_name: {0})".format(namespace_name)))
+        else:
+            err_msg = _("Open DPC Auth switch failed.(namespace_name: {0})".format(namespace_name))
+            raise exception.InvalidShare(reason=err_msg)
+
+    def allow_access_for_dpc(self, namespace_name, dpc_ip):
+        """Create DPC authentication information."""
+
+        url = "/dsware/service/fsmCliCmd"
+        access_para = {
+            "ip": dpc_ip,
+            "namespace": namespace_name,
+            "auth_type": "DPC_AUTH_IP",
+            "name": "setDpcIpAuth",
+            "serviceType": "eds-f"
+        }
+
+        data = jsonutils.dumps(access_para)
+        result = self.call(None, data, "POST", ex_url=url)
+
+        nums = len(dpc_ip.split(','))
+        if result.get('result') == 0:
+            LOG.info(_("Add DPC Auth access success.(namespace_name:{0} nums:{1})".format(namespace_name, nums)))
+        else:
+            err_msg = _("Add DPC Auth access failed.(namespace_name:{0} nums:{1})".format(namespace_name, nums))
+            raise exception.InvalidShare(reason=err_msg)
+
+    def deny_access_for_dpc(self, namespace_name, dpc_ip):
+        """	Delete DPC authentication information."""
+
+        url = "/dsware/service/fsmCliCmd"
+        access_para = {
+            "ip": dpc_ip,
+            "namespace": namespace_name,
+            "auth_type": "DPC_AUTH_IP",
+            "name": "delDpcIpAuth",
+            "serviceType": "eds-f"
+        }
+
+        data = jsonutils.dumps(access_para)
+        result = self.call(None, data, "POST", ex_url=url)
+
+        nums = len(dpc_ip.split(','))
+        if result.get('result') == 0:
+            LOG.info(_("Delete DPC Auth access success.(namespace_name:{0} nums:{1})".format(namespace_name, nums)))
+        else:
+            err_msg = _("Delete DPC Auth access failed.(namespace_name:{0} nums:{1})".format(namespace_name, nums))
+            raise exception.InvalidShare(reason=err_msg)
+
     @staticmethod
     def _error_code(result):
         """Get error codes returned by all interfaces"""
@@ -677,17 +774,17 @@ class RestHelper:
         """Get all namespace information"""
 
         totals = self.get_total_info_by_offset(
-            self._get_namespace_info, account_id)
+            self._get_namespace_info, [account_id])
         return totals
 
-    def _get_namespace_info(self, offset, account_id):
+    def _get_namespace_info(self, offset, extra_param):
         """Get namespace information in batches"""
 
         url = 'converged_service/namespaces'
         query_para = {
             "range": {"offset": offset,
                       "limit": constants.MAX_QUERY_COUNT},
-            "filter": {"account_id": account_id}
+            "filter": {"account_id": extra_param[0]}
         }
         data = jsonutils.dumps(query_para)
         result = self.call(url, data, "GET")
@@ -873,15 +970,15 @@ class RestHelper:
         """Get all dtree information of one namespace"""
 
         totals = self.get_total_info_by_offset(
-            self._get_all_dtree_info_of_namespace, filesystem_id)
+            self._get_all_dtree_info_of_namespace, [filesystem_id])
         return totals
 
-    def _get_all_dtree_info_of_namespace(self, offset, filesystem_id):
+    def _get_all_dtree_info_of_namespace(self, offset, extra_param):
         """Get namespace information in batches"""
 
         url = 'file_service/dtrees'
         query_para = {
-            "file_system_id": filesystem_id,
+            "file_system_id": extra_param[0],
             "range": {"offset": offset,
                       "limit": constants.MAX_QUERY_COUNT}
         }
