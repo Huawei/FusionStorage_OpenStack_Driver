@@ -114,7 +114,8 @@ class CheckUpdateStorage(object):
                     max_over_subscription_ratio=max_over_subscription_ratio,
                     dedupe=False,
                     thin_provisioning=True,
-                    ipv6_support=True
+                    ipv6_support=True,
+                    share_proto='DPC'
                 )
                 data["pools"].append(pool)
 

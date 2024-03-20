@@ -19,6 +19,7 @@ from oslo_log import log
 
 from manila import exception
 from manila.i18n import _
+from manila.share import share_types
 
 from .operate_share import OperateShare
 from .change_access import ChangeAccess
@@ -31,6 +32,7 @@ LOG = log.getLogger(__name__)
 class CustomizationOperate(OperateShare):
     def __init__(self, helper, share):
         super(CustomizationOperate, self).__init__(helper, share)
+        self.share_proto = self._get_share_share_proto()  # 共享协议类型
         self.share_parent_id = self.share.get('parent_share_id')
         self.dtree_name = None
         self.dtree_id = None
@@ -71,9 +73,11 @@ class CustomizationOperate(OperateShare):
         return True
 
     def update_qos(self, qos_specs, root):
-        """苏研定制接口，根据传递的qos_specs，刷新share的qos信息，如果没有则创建对应qos"""
-        if (not self.share.get('export_locations') or not self.share.get(
-                'export_locations')[0].get('path')):
+        """
+        苏研定制接口，根据传递的qos_specs，刷新share的qos信息，
+        如果没有则创建对应qos, 此接口的share不是share_instance对象是share对象
+        """
+        if not self.share.get('export_locations')[0]:
             err_msg = _("update share qos fail for invalid export location.")
             raise exception.InvalidShare(reason=err_msg)
 
@@ -213,8 +217,8 @@ class CustomizationOperate(OperateShare):
         return account_name
 
     def _get_update_qos_config(self, qos_specs):
-        if not (qos_specs.get('total_bytes_sec') and
-                qos_specs.get('total_iops_sec')):
+        if qos_specs.get('total_bytes_sec') is None or \
+                qos_specs.get('total_iops_sec') is None:
             err_msg = "Can not get qos config when update_qos," \
                       "total_bytes_sec and total_iops_sec must need to be " \
                       "set when update qos" \
@@ -269,7 +273,7 @@ class CustomizationOperate(OperateShare):
 
         self.namespace_name = 'share-' + self.share.get('share_id')
         try:
-            forbidden_dpc = constants.SUPPORT_DPC if 'DPC' in self.share_proto else constants.NOT_SUPPORT_DPC
+            forbidden_dpc = constants.NOT_FORBIDDEN_DPC if 'DPC' in self.share_proto else constants.FORBIDDEN_DPC
             storage_pool_id = self.free_pool[0]
             result = self.helper.create_namespace(self.namespace_name, storage_pool_id, self.account_id,
                                                   forbidden_dpc, self.tier_info.get('atime_mode'))
@@ -333,14 +337,15 @@ class CustomizationOperate(OperateShare):
         """
 
         if 'NFS' in self.share_proto:
-            result = self.helper.query_nfs_share_information(self.account_id)
+            result = self.helper.query_nfs_share_information(self.account_id, self.namespace_id, self.dtree_id)
             for nfs_share in result:
                 if str(self.dtree_id) == nfs_share.get('dtree_id'):
                     nfs_share_id = nfs_share.get('id')
                     self.helper.delete_nfs_share(nfs_share_id, self.account_id)
                     break
         if 'CIFS' in self.share_proto:
-            result = self.helper.query_cifs_share_information(self.account_id)
+            result = self.helper.query_cifs_share_information(
+                self.account_id, self.dtree_name)
             for cifs_share in result:
                 if str(self.dtree_name) == cifs_share.get('name'):
                     cifs_share_id = cifs_share.get('id')
@@ -411,7 +416,7 @@ class CustomizationOperate(OperateShare):
         the share param of update_qos and parse_cmcc_qos_options
         is different from other interface
         """
-        export_location = self.share.get('export_locations')[0].get('path')
+        export_location = self.share.get('export_locations')[0]
         self._get_namespace_name_from_location(export_location)
 
     def _get_namespace_name_from_location(self, export_location):
@@ -441,13 +446,32 @@ class CustomizationOperate(OperateShare):
             err_msg = (_("Shrink share fail for space used({0}G) > new sizre({1}G)".format(cur_size, new_size)))
             raise exception.InvalidInput(reason=err_msg)
 
+    def _get_share_share_proto(self):
+        """临时方案，share_proto为nfs，且share_type为dpc时为dpc共享，其他情况不变"""
+        ans = []
+        share_proto = self.share.get('share_proto', '').split('&')
+
+        type_id = self.share.get('share_type_id')
+        extra_specs = share_types.get_share_type_extra_specs(type_id)
+        tmp_share_proto = extra_specs.get('share_proto', '').split('&')
+
+        if "DPC" in tmp_share_proto:
+            ans.append("DPC")
+        elif "NFS" in share_proto:
+            ans.append("NFS")
+        elif "CIFS" in share_proto:
+            ans.append("CIFS")
+        return ans
+
 
 class CustomizationChangeAccess(ChangeAccess):
     def __init__(self, helper, share, root):
         super(CustomizationChangeAccess, self).__init__(helper, share)
         self.root = root
+        self.share_proto = self._get_share_share_proto()  # 共享协议类型
         self.share_parent_id = self.share.get('parent_share_id')
         self.dtree_name = None
+        self.dtree_id = None
 
     def update_access(self, access_rules, add_rules, delete_rules):
         """如果传入的参数包含parent_share_id，则走二级目录的流程"""
@@ -475,7 +499,7 @@ class CustomizationChangeAccess(ChangeAccess):
         """如果传入的参数包含parent_share_id，则走二级目录的流程"""
 
         if not self.share_parent_id:
-            return super(CustomizationChangeAccess, self).allow_access(access)
+            return super(CustomizationChangeAccess, self).deny_access(access)
 
         self._get_account_and_share_related_information()
         self._classify_rules([access], 'deny')
@@ -493,7 +517,7 @@ class CustomizationChangeAccess(ChangeAccess):
         self._find_account_id()
         self._get_export_location_info()
         self._get_dtree_share_related_info()
-        self._query_and_set_share_info()
+        self._query_and_set_share_info(self.dtree_id, self.dtree_name)
 
     def _get_dtree_share_related_info(self):
         """二级目录场景下，需要获取命名空间和dtree的名称"""
@@ -501,6 +525,29 @@ class CustomizationChangeAccess(ChangeAccess):
         self.namespace_name = self.export_locations.split('\\')[-1].split('/')[-2]
         self.dtree_name = self.export_locations.split('\\')[-1].split('/')[-1]
         self.share_path = '/' + self.namespace_name + '/' + self.dtree_name
+        namespace_info = self.helper.query_namespace_by_name(
+            self.namespace_name)
+        self.namespace_id = namespace_info.get('id')
+        dtree_info = self.helper.query_dtree_by_name(
+            self.dtree_name, self.namespace_id)
+        for info in dtree_info:
+            self.dtree_id = info.get('id')
+
+    def _get_share_share_proto(self):
+        ans = []
+        share_proto = self.share.get('share_proto', '').split('&')
+
+        type_id = self.share.get('share_type_id')
+        extra_specs = share_types.get_share_type_extra_specs(type_id)
+        tmp_share_proto = extra_specs.get('share_proto', '').split('&')
+
+        if "DPC" in tmp_share_proto:
+            ans.append("DPC")
+        elif "NFS" in share_proto:
+            ans.append("NFS")
+        elif "CIFS" in share_proto:
+            ans.append("CIFS")
+        return ans
 
 
 class CustomizationChangeCheckUpdateStorage(CheckUpdateStorage):
