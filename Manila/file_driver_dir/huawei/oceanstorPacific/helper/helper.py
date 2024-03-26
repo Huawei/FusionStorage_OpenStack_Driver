@@ -412,13 +412,9 @@ class RestHelper:
 
         url = "nas_protocol/nfs_share_list"
         nfs_para = {
-            'account_id': account_id,
-            'filter': [
-                {
-                    'fs_id': fs_id,
-                    'dtree_id': dtree_id,
-                }
-            ]
+            "account_id": account_id,
+            "filter": "[{\"fs_id\": %d, \"dtree_id\": \"%s\"}]" %
+                      (fs_id, str(fs_id) + '@' + str(dtree_id))
         }
         data = jsonutils.dumps(nfs_para)
         result = self.call(url, data, "GET")
@@ -437,12 +433,8 @@ class RestHelper:
         url = "file_service/cifs_share_list"
 
         cifs_para = {
-            'account_id': account_id,
-            'filter': [
-                {
-                    'name': share_name
-                }
-            ]
+            "account_id": account_id,
+            "filter": "[{\"name\":\"%s\"}]" % share_name
         }
 
         data = jsonutils.dumps(cifs_para)
@@ -598,14 +590,12 @@ class RestHelper:
 
         url = "nas_protocol/nfs_share_auth_client_list"
         filter_para = {
-            'filter': [{
-                "share_id": extra_param[0]
-            }],
+            "filter": "[{\"share_id\": \"%s\"}]" % str(extra_param[0]),
             "range": {
                 "offset": offset,
                 "limit": constants.MAX_QUERY_COUNT
             },
-            'account_id': extra_param[1]
+            "account_id": extra_param[1]
         }
 
         data = jsonutils.dumps(filter_para)
@@ -629,14 +619,12 @@ class RestHelper:
 
         url = "file_service/cifs_share_auth_client_list"
         filter_para = {
-            'filter': [{
-                    "share_id": extra_param[0]
-                }],
+            "filter": "[{\"share_id\": \"%s\"}]" % str(extra_param[0]),
             "range": {
                 "offset": offset,
                 "limit": constants.MAX_QUERY_COUNT
             },
-            'account_id': extra_param[1],
+            "account_id": extra_param[1],
         }
 
         data = jsonutils.dumps(filter_para)
