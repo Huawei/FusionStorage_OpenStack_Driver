@@ -414,7 +414,7 @@ class RestHelper:
         nfs_para = {
             "account_id": account_id,
             "filter": "[{\"fs_id\": %d, \"dtree_id\": \"%s\"}]" %
-                      (fs_id, str(fs_id) + '@' + str(dtree_id))
+                      (fs_id, str(dtree_id))
         }
         data = jsonutils.dumps(nfs_para)
         result = self.call(url, data, "GET")
