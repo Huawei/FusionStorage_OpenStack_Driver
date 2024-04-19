@@ -115,7 +115,7 @@ class HuaweiNasDriver(driver.ShareDriver):
             share_backend_name=backend_name or 'OceanStorPacific_NFS_CIFS',
             vendor_name='OceanStorPacific',
             driver_version='1.0',
-            storage_protocol='NFS_CIFS',
+            storage_protocol='NFS_CIFS_DPC',
             driver_handles_share_servers=False,
             qos=True,
             snapshot_support=False,

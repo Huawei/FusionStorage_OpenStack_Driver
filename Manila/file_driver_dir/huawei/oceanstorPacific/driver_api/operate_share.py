@@ -23,32 +23,28 @@ from manila.i18n import _
 from manila.share import api
 from manila.share import share_types
 
+from .base_share_property import BaseShareProperty
 from ..helper import constants
+
 
 LOG = log.getLogger(__name__)
 share_api = api.API()
 
 
-class OperateShare(object):
-    def __init__(self, helper, share):
-        self.helper = helper
-        self.share = share
+class OperateShare(BaseShareProperty):
+    def __init__(self, helper, share, root):
+        super(OperateShare, self).__init__(helper, share=share, root=root)
 
-        self.root = None
         self.free_pool = None
         self.domain = None  # 集群域名
-        self.account_id = None  # 账户Id
         self.namespace_name = None  # 命名空间名称
         self.namespace_id = None  # 命名空间Id
         self.export_locations = None  # share路径信息
         self.quota_id = None  # 配额ID
-        self.share_proto = self.share.get('share_proto', '').split('&')  # 共享协议类型
         self.tier_info = {}  # 分级策略信息
         self.qos_config = {}  # QOS策略信息
 
-    def create_share(self, root, free_pool):
-
-        self.root = root
+    def create_share(self, free_pool):
         self.free_pool = free_pool
 
         self._check_domain()
@@ -56,7 +52,7 @@ class OperateShare(object):
         self._get_qos_config()
         self._get_or_create_account()
         self._create_namespace()
-        self._create_quote()
+        self._create_quota()
         self._create_qos()
         self._create_tier_migrate_policy()
         self._create_share_protocol()
@@ -69,7 +65,9 @@ class OperateShare(object):
             return False
 
         self._get_account_id()
-        self._get_namespace_info()
+        if not self._get_namespace_info():
+            LOG.warn(_("Delete share fail, cannot find namespace info of share"))
+            return False
         self._delete_share_protocol()
         self.helper.delete_qos(self.namespace_name)
         self.helper.delete_namespace(self.namespace_name)
@@ -103,7 +101,8 @@ class OperateShare(object):
     def _check_domain(self):
         """当共享协议类型存在Nfs或Cifs时，检查配置文件集群域名是否存在"""
 
-        self.domain = self.root.findtext('Filesystem/ClusterDomainName').strip()
+        domain_name = self.root.findtext('Filesystem/ClusterDomainName')
+        self.domain = domain_name.strip() if domain_name else domain_name
         if ('NFS' in self.share_proto or 'CIFS' in self.share_proto) and not self.domain:
             err_msg = _("Create namespace({0}) error, because can't "
                         "get the domain name of cluster...".format(self.share['id']))
@@ -210,36 +209,17 @@ class OperateShare(object):
         self._get_basic_band_width_qos_config(extra_specs)
         self._get_bps_density_qos_config(extra_specs)
 
-    def _find_account_name(self, root=None):
-        return self.share.get("project_id")
-
     def _get_or_create_account(self):
         """
         Driver在创建文件系统时先查询projectId对应的租户是否存在，如果存在，直接使用租户Id。
         如果不存在，创建一个租户，租户名称为公有云下发的projectId，返回的租户accountId供系统内部使用。
         """
-
-        account_name = self._find_account_name(self.root)
-        result = self.helper.query_account_by_name(account_name)
-        if result:
-            self.account_id = result.get('id')
-            LOG.info("Account({0}) already exist. No need create.".format(account_name))
+        self._get_account_id()
+        if self.account_id is not None:
+            LOG.info("Account({0}) already exist. No need create.".format(self.account_name))
         else:
-            result = self.helper.create_account(account_name)
+            result = self.helper.create_account(self.account_name)
             self.account_id = result.get('id')
-
-    def _create_namespace_find_namespace_name(self, share_name):
-        self.namespace_name = share_name
-        for i in range(1, 12):
-            result = self.helper.query_namespace_by_name(self.namespace_name)
-            if result:
-                LOG.info(_("Namespace({0}) has been used, Try to find other".format(self.namespace_name)))
-                self.namespace_name = share_name + '_{0:0>2d}'.format(i)
-                if i == 11:
-                    err_msg = _("Duplicate namespace:{0} (_01~10).".format(self.namespace_name))
-                    raise exception.InvalidInput(reason=err_msg)
-            else:
-                return
 
     def _create_namespace(self):
         """
@@ -247,11 +227,7 @@ class OperateShare(object):
         命名空间名称首先取用户指定的名称，如果用户取指定去share_instance_id
         """
 
-        if self.share['display_name']:
-            self.namespace_name = 'share-' + self.share.get('display_name')
-        else:
-            self.namespace_name = 'share-' + self.share.get('id')
-
+        self.namespace_name = 'share-' + self.share.get('share_id')
         try:
             forbidden_dpc = constants.NOT_FORBIDDEN_DPC if 'DPC' in self.share_proto else constants.FORBIDDEN_DPC
             storage_pool_id = self.free_pool[0]
@@ -264,7 +240,7 @@ class OperateShare(object):
             self._rollback_creat(1)
             raise e
 
-    def _create_quote(self):
+    def _create_quota(self):
         """创建命名空间配额"""
 
         quota_size = self.share['size']
@@ -326,7 +302,6 @@ class OperateShare(object):
         LOG.info(_("Rollback done."))
 
     def _delete_share_protocol(self):
-
         if 'NFS' in self.share_proto:
             result = self.helper.query_nfs_share_information(self.account_id, self.namespace_id)
             for nfs_share in result:
@@ -368,12 +343,6 @@ class OperateShare(object):
         else:
             LOG.info("The account has namespace or access zone. "
                      "Cannot delete.(account_id: {0})".format(self.account_id))
-
-    def _get_account_id(self):
-        """通过账户名称去存储查询账户信息并获取账户ID"""
-        account_name = self._find_account_name(self.root)
-        result = self.helper.query_account_by_name(account_name)
-        self.account_id = result.get('id')
 
     def _get_namespace_info(self):
         """

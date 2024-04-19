@@ -62,34 +62,34 @@ class OceanStorPacificStorageConnection(object):
 
     def create_share(self, context, share, share_server):
         """创建共享，同时返回挂载路径信息"""
-        location = driver_api.OperateShare(self.helper, share).create_share(self.root, self.free_pool)
+        location = driver_api.OperateShare(self.helper, share, self.root).create_share(self.free_pool)
         return location
 
     def delete_share(self, context, share, share_server):
         """删除共享"""
-        driver_api.OperateShare(self.helper, share).delete_share()
+        driver_api.OperateShare(self.helper, share, self.root).delete_share()
 
     def ensure_share(self, share, share_server):
         """检查共享状态，同时返回挂载路径信息"""
-        location = driver_api.OperateShare(self.helper, share).ensure_share()
+        location = driver_api.OperateShare(self.helper, share, self.root).ensure_share()
         return location
 
     def extend_share(self, share, new_size, share_server):
         """扩容共享"""
-        driver_api.OperateShare(self.helper, share).change_share(new_size, 'extend')
+        driver_api.OperateShare(self.helper, share, self.root).change_share(new_size, 'extend')
 
     def shrink_share(self, share, new_size, share_server):
         """缩容共享"""
-        driver_api.OperateShare(self.helper, share).change_share(new_size, 'shrink')
+        driver_api.OperateShare(self.helper, share, self.root).change_share(new_size, 'shrink')
 
     def allow_access(self, share, access, share_server):
         """在共享上添加一条鉴权信息"""
-        driver_api.ChangeAccess(self.helper, share).allow_access(access)
+        driver_api.ChangeAccess(self.helper, share, self.root).allow_access(access)
 
     def deny_access(self, share, access, share_server):
         """在共享上删除一条鉴权信息"""
-        driver_api.ChangeAccess(self.helper, share).deny_access(access)
+        driver_api.ChangeAccess(self.helper, share, self.root).deny_access(access)
 
     def update_access(self, share, access_rules, add_rules, delete_rules, share_server):
         """更新共享的鉴权信息，主要用于批量添加/删除鉴权信息"""
-        driver_api.ChangeAccess(self.helper, share).update_access(access_rules, add_rules, delete_rules)
+        driver_api.ChangeAccess(self.helper, share, self.root).update_access(access_rules, add_rules, delete_rules)

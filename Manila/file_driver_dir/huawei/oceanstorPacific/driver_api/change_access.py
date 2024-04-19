@@ -14,26 +14,22 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import netaddr
 from oslo_log import log
 
 from manila import exception
 from manila.common import constants as common_constants
 from manila.i18n import _
 
+from .base_share_property import BaseShareProperty
 
 LOG = log.getLogger(__name__)
 
 
-class ChangeAccess(object):
-    def __init__(self, helper, share):
-        self.helper = helper
-        self.share = share
-
-        self.account_id = None
+class ChangeAccess(BaseShareProperty):
+    def __init__(self, helper, share, root):
+        super(ChangeAccess, self).__init__(helper, share=share, root=root)
         self.namespace_name = None
         self.namespace_id = None
-        self.share_proto = self.share.get('share_proto', '').split('&')
         self.share_path = None
         self.export_locations = None  # share路径信息
         self.nfs_share_id = None
@@ -55,13 +51,8 @@ class ChangeAccess(object):
         self._get_account_and_namespace_information()
         self._classify_rules([access], 'deny')
 
-    def _find_account_id(self):
-        account_name = self.share.get('project_id')
-        result = self.helper.query_account_by_name(account_name)
-        self.account_id = result.get('id')
-
     def _get_account_and_namespace_information(self):
-        self._find_account_id()
+        self._get_account_id()
         self._get_export_location_info()
         self._get_share_related_info()
         self._query_and_set_share_info()
@@ -139,50 +130,92 @@ class ChangeAccess(object):
                     LOG.info(_("The access_to {0} does not exist").format(access_to))
 
     def _deal_access_for_dpc(self, action):
-
         if action == 'allow':
             LOG.info(_("Will be add dpc access.(nums: {0})".format(len(self.dpc_rules))))
         if action == 'deny':
             LOG.info(_("Will be delete dpc access.(nums: {0})".format(len(self.dpc_rules))))
 
         for index in range(0, len(self.dpc_rules), 200):
-            dpc_ips = ""
+            dpc_ips = []
             for access in self.dpc_rules[index:index + 200]:
                 access_to = self.standard_ipaddr(access.get('access_to'))
-
-                if not dpc_ips:
-                    dpc_ips += access_to
-                else:
-                    dpc_ips += ',' + access_to
+                if action == "deny" and not self.is_ipv4_address(access_to):
+                    LOG.warning('DPC authentication now is not support IPV6 address, '
+                                'skip it , ipaddress is %s', access_to)
+                    continue
+                dpc_ips.append(access_to)
 
             if action == "allow":
-                self.helper.allow_access_for_dpc(self.namespace_name, dpc_ips)
-            elif action == "deny":
-                self.helper.deny_access_for_dpc(self.namespace_name, dpc_ips)
+                self.helper.allow_access_for_dpc(self.namespace_name, ','.join(dpc_ips))
+            elif dpc_ips:
+                self.helper.deny_access_for_dpc(self.namespace_name, ','.join(dpc_ips))
 
-    def _clear_access(self):
-        """Remove all access rules of the share"""
+    def _sync_access(self, access_rules):
+        """Sync all access rules of the share between storage and platform"""
         if 'NFS' in self.share_proto:
             result = self.helper.query_nfs_share_clients_information(self.nfs_share_id, self.account_id)
-            for data in result:
-                self.helper.deny_access_for_nfs(data.get('id'), self.account_id)
-        if self.share_proto == 'CIFS':
+            deny_rules, allow_rules, change_rules = self._get_need_update_access(
+                result, access_rules, 'access_name', 'access_value')
+            for deny_rule in deny_rules:
+                self.helper.deny_access_for_nfs(deny_rule.get('client_id'), self.account_id)
+            for allow_rule in allow_rules:
+                self.helper.allow_access_for_nfs(
+                    self.nfs_share_id, allow_rule.get('access_to'),
+                    allow_rule.get('access_level'), self.account_id)
+            for change_rule in change_rules:
+                self.helper.change_access_for_nfs(
+                    change_rule.get('client_id'),
+                    change_rule.get('access_value'), self.account_id)
+        if 'CIFS' in self.share_proto:
             result = self.helper.query_cifs_share_user_information(self.cifs_share_id, self.account_id)
-            for data in result:
-                self.helper.deny_access_for_cifs(data.get('id'), self.account_id)
+            deny_rules, allow_rules, change_rules = self._get_need_update_access(
+                result, access_rules, 'name', 'permission')
+            for deny_rule in deny_rules:
+                self.helper.deny_access_for_cifs(deny_rule.get('client_id'), self.account_id)
+            for allow_rule in allow_rules:
+                self.helper.allow_access_for_cifs(
+                    self.cifs_share_id, allow_rule.get('access_to'),
+                    allow_rule.get('access_level'), self.account_id)
+            for change_rule in change_rules:
+                self.helper.change_access_for_cifs(
+                    change_rule.get('client_id'),
+                    change_rule.get('access_value'), self.account_id)
+        if 'DPC' in self.share_proto:
+            self.helper.deny_access_for_dpc(self.namespace_name, '*')
+            self._classify_rules(access_rules, 'allow')
 
-    @staticmethod
-    def standard_ipaddr(access):
-        """
-        When the added client permission is an IP address,
-        standardize it. Otherwise, do not process it.
-        """
-        try:
-            format_ip = netaddr.IPAddress(access)
-            access_to = str(format_ip.format(dialect=netaddr.ipv6_compact))
-            return access_to
-        except Exception:
-            return access
+    def _get_need_update_access(self, storage_access_list, access_rules, access_param,
+                                permission_param):
+        """get all need deny access rules/allow access rules/change access rules"""
+        need_remove_access_info = {}
+        need_add_access_info = {}
+        need_change_access_info = {}
+        for data in storage_access_list:
+            access_name = self.standard_ipaddr(data.get(access_param))
+            need_remove_access_info[access_name] = {
+                'access_to': access_name,
+                'access_level': data.get(permission_param),
+                'client_id': data.get('id')
+            }
+        for rule in access_rules:
+            access_to = self.standard_ipaddr(rule.get('access_to'))
+            access_level = 0 if rule.get('access_level') == 'ro' else 1
+            access_info = need_remove_access_info.get(access_to)
+            if not access_info:
+                need_add_access_info[access_to] = {
+                    'access_to': access_to,
+                    'access_level': rule.get('access_level')
+                }
+            elif access_info.get('access_level') != access_level:
+                need_change_access_info['access_to'] = {
+                    'client_id': access_info.get('client_id'),
+                    'access_value': rule.get('access_level'),
+                }
+                need_remove_access_info.pop(access_to)
+            else:
+                need_remove_access_info.pop(access_to)
+
+        return need_remove_access_info, need_add_access_info, need_change_access_info
 
     def _get_export_location_info(self):
         """校验share是否包含path信息，有则初始化"""
@@ -234,5 +267,4 @@ class ChangeAccess(object):
         if delete_rules:
             self._classify_rules(delete_rules, 'deny')
         if not (add_rules or delete_rules):
-            self._clear_access()
-            self._classify_rules(access_rules, 'allow')
+            self._sync_access(access_rules)
