@@ -19,7 +19,6 @@ from oslo_log import log
 
 from manila import exception
 from manila.i18n import _
-from manila.share import share_types
 
 from .operate_share import OperateShare
 from .change_access import ChangeAccess
@@ -30,22 +29,16 @@ LOG = log.getLogger(__name__)
 
 
 class CustomizationOperate(OperateShare):
-    def __init__(self, helper, share):
-        super(CustomizationOperate, self).__init__(helper, share)
-        self.share_proto = self._get_share_share_proto()  # 共享协议类型
+    def __init__(self, helper, share, root):
+        super(CustomizationOperate, self).__init__(helper, share, root)
         self.share_parent_id = self.share.get('parent_share_id')
         self.dtree_name = None
         self.dtree_id = None
 
-    def set_root(self, root):
-        self.root = root
-        return self
-
-    def create_share(self, root, free_pool):
+    def create_share(self, free_pool):
         if not self.share_parent_id:
-            return super(CustomizationOperate, self).create_share(root, free_pool)
+            return super(CustomizationOperate, self).create_share(free_pool)
 
-        self.root = root
         self.free_pool = free_pool
         self._check_domain()
         self._get_or_create_account()
@@ -72,7 +65,7 @@ class CustomizationOperate(OperateShare):
         LOG.info("{0} share done. New size:{1}.".format(action, new_size))
         return True
 
-    def update_qos(self, qos_specs, root):
+    def update_qos(self, qos_specs):
         """
         苏研定制接口，根据传递的qos_specs，刷新share的qos信息，
         如果没有则创建对应qos, 此接口的share不是share_instance对象是share对象
@@ -83,9 +76,7 @@ class CustomizationOperate(OperateShare):
 
         self._get_update_qos_config(qos_specs)
 
-        account_name = self._find_account_name(root)
-        result = self.helper.query_account_by_name(account_name)
-        self.account_id = result.get('id')
+        self._get_account_id()
         self._get_namespace_name_for_qos()
 
         qos_name = self.namespace_name
@@ -126,7 +117,9 @@ class CustomizationOperate(OperateShare):
             return False
 
         self._get_account_id()
-        self._get_dtree_namespace_info()
+        if not self._get_dtree_namespace_info():
+            LOG.warn(_("Delete share fail, cannot find namespace info of share"))
+            return False
         if not self._get_dtree_info():
             LOG.warn(_("Delete share fail, cannot find dtree info of share"))
             return False
@@ -268,20 +261,6 @@ class CustomizationOperate(OperateShare):
         LOG.error(err_msg)
         raise exception.InvalidInput(reason=err_msg)
 
-    def _create_namespace(self):
-        """苏研定制接口创建namespace时直接使用share的ID作为命名空间的名称"""
-
-        self.namespace_name = 'share-' + self.share.get('share_id')
-        try:
-            forbidden_dpc = constants.NOT_FORBIDDEN_DPC if 'DPC' in self.share_proto else constants.FORBIDDEN_DPC
-            storage_pool_id = self.free_pool[0]
-            result = self.helper.create_namespace(self.namespace_name, storage_pool_id, self.account_id,
-                                                  forbidden_dpc, self.tier_info.get('atime_mode'))
-            self.namespace_id = result.get('id')
-        except Exception as e:
-            self._rollback_creat(1)
-            raise e
-
     def _create_dtree(self):
         """创建二级目录的dtree"""
 
@@ -361,6 +340,8 @@ class CustomizationOperate(OperateShare):
             location.append('NFS:' + self.domain + ":/" + share_path)
         if 'CIFS' in self.share_proto:
             location.append('CIFS:\\\\' + self.domain + '\\' + share_path)
+        if 'DPC' in self.share_proto:
+            location.append('DPC:/' + share_path)
 
         return location
 
@@ -446,29 +427,10 @@ class CustomizationOperate(OperateShare):
             err_msg = (_("Shrink share fail for space used({0}G) > new sizre({1}G)".format(cur_size, new_size)))
             raise exception.InvalidInput(reason=err_msg)
 
-    def _get_share_share_proto(self):
-        """临时方案，share_proto为nfs，且share_type为dpc时为dpc共享，其他情况不变"""
-        ans = []
-        share_proto = self.share.get('share_proto', '').split('&')
-
-        type_id = self.share.get('share_type_id')
-        extra_specs = share_types.get_share_type_extra_specs(type_id)
-        tmp_share_proto = extra_specs.get('share_proto', '').split('&')
-
-        if "DPC" in tmp_share_proto:
-            ans.append("DPC")
-        elif "NFS" in share_proto:
-            ans.append("NFS")
-        elif "CIFS" in share_proto:
-            ans.append("CIFS")
-        return ans
-
 
 class CustomizationChangeAccess(ChangeAccess):
     def __init__(self, helper, share, root):
-        super(CustomizationChangeAccess, self).__init__(helper, share)
-        self.root = root
-        self.share_proto = self._get_share_share_proto()  # 共享协议类型
+        super(CustomizationChangeAccess, self).__init__(helper, share, root)
         self.share_parent_id = self.share.get('parent_share_id')
         self.dtree_name = None
         self.dtree_id = None
@@ -505,16 +467,9 @@ class CustomizationChangeAccess(ChangeAccess):
         self._classify_rules([access], 'deny')
         return True
 
-    def _find_account_id(self):
-        """通过xml文件配置的账户名称获取账户信息"""
-        LOG.info("Find account id from xml, call by ChangeAccess")
-        account_name = self.root.findtext('Filesystem/AccountName').strip()
-        result = self.helper.query_account_by_name(account_name)
-        self.account_id = result.get('id')
-
     def _get_account_and_share_related_information(self):
         """二级目录场景下，share_path需要包含dtree名称"""
-        self._find_account_id()
+        self._get_account_id()
         self._get_export_location_info()
         self._get_dtree_share_related_info()
         self._query_and_set_share_info(self.dtree_id, self.dtree_name)
@@ -533,27 +488,10 @@ class CustomizationChangeAccess(ChangeAccess):
         for info in dtree_info:
             self.dtree_id = info.get('id')
 
-    def _get_share_share_proto(self):
-        ans = []
-        share_proto = self.share.get('share_proto', '').split('&')
-
-        type_id = self.share.get('share_type_id')
-        extra_specs = share_types.get_share_type_extra_specs(type_id)
-        tmp_share_proto = extra_specs.get('share_proto', '').split('&')
-
-        if "DPC" in tmp_share_proto:
-            ans.append("DPC")
-        elif "NFS" in share_proto:
-            ans.append("NFS")
-        elif "CIFS" in share_proto:
-            ans.append("CIFS")
-        return ans
-
 
 class CustomizationChangeCheckUpdateStorage(CheckUpdateStorage):
     def __init__(self, helper, root):
         super(CustomizationChangeCheckUpdateStorage, self).__init__(helper, root)
-        self.account_id = None
 
     def _get_all_share_usages(self, all_namespace_info):
         """
@@ -591,13 +529,6 @@ class CustomizationChangeCheckUpdateStorage(CheckUpdateStorage):
     def get_all_share_usage(self):
         """苏研定制接口，获取对应帐户下所有的share信息"""
         LOG.info("begin to query all share usages")
-        self._find_account_id()
+        self._get_account_id()
         all_namespace_info = self.helper.get_all_namespace_info(self.account_id)
         return self._get_all_share_usages(all_namespace_info)
-
-    def _find_account_id(self):
-        """获取账户信息"""
-
-        account_name = self.root.findtext('Filesystem/AccountName').strip()
-        result = self.helper.query_account_by_name(account_name)
-        self.account_id = result.get('id')

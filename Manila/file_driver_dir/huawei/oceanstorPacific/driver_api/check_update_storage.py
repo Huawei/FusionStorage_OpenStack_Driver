@@ -19,16 +19,15 @@ from oslo_log import log
 from manila import exception
 from manila.i18n import _
 
+from .base_share_property import BaseShareProperty
 from ..helper import constants
 
 LOG = log.getLogger(__name__)
 
 
-class CheckUpdateStorage(object):
+class CheckUpdateStorage(BaseShareProperty):
     def __init__(self, helper, root):
-        self.helper = helper
-        self.root = root
-
+        super(CheckUpdateStorage, self).__init__(helper, root=root)
         self.pools_free = {}
         self.free_pool = None
 

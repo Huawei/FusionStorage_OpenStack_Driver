@@ -34,12 +34,12 @@ class OceanStorPacificStorageConnectionForSuyan(OceanStorPacificStorageConnectio
 
     def create_share(self, context, share, share_server):
         """苏研qos为定制的参数，所以此处重写qos相关解析方法"""
-        location = driver_api.CustomizationOperate(self.helper, share).create_share(self.root, self.free_pool)
+        location = driver_api.CustomizationOperate(self.helper, share, self.root).create_share(self.free_pool)
         return location
 
     def delete_share(self, context, share, share_server):
         """删除share接口，苏研配置单独的一个账户用于创建ip"""
-        driver_api.CustomizationOperate(self.helper, share).set_root(self.root).delete_share()
+        driver_api.CustomizationOperate(self.helper, share, self.root).delete_share()
 
     def allow_access(self, share, access, share_server):
         """在共享上添加一条鉴权信息，苏研配置单独的一个账户用于创建ip"""
@@ -78,7 +78,7 @@ class OceanStorPacificStorageConnectionForSuyan(OceanStorPacificStorageConnectio
                        “used_space”： 已使用容量
                        }
         """
-        share_capacity = driver_api.CustomizationOperate(self.helper, share).get_share_usage(share_usages)
+        share_capacity = driver_api.CustomizationOperate(self.helper, share, self.root).get_share_usage(share_usages)
         return share_capacity
 
     def update_qos(self, share, qos_specs):
@@ -92,7 +92,7 @@ class OceanStorPacificStorageConnectionForSuyan(OceanStorPacificStorageConnectio
             }
         :return: None
         """
-        driver_api.CustomizationOperate(self.helper, share).update_qos(qos_specs, self.root)
+        driver_api.CustomizationOperate(self.helper, share, self.root).update_qos(qos_specs)
 
     def parse_cmcc_qos_options(self, share):
         """
@@ -104,20 +104,20 @@ class OceanStorPacificStorageConnectionForSuyan(OceanStorPacificStorageConnectio
              “total_iops_sec”： 总IOPS，
             }
         """
-        share_qos_info = driver_api.CustomizationOperate(self.helper, share).parse_cmcc_qos_options()
+        share_qos_info = driver_api.CustomizationOperate(self.helper, share, self.root).parse_cmcc_qos_options()
         return share_qos_info
 
     def ensure_share(self, share, share_server):
         """
         校验shre的状态，苏研定制接口下二级目录获取namespace的方式有变化
         """
-        location = driver_api.CustomizationOperate(self.helper, share).ensure_share()
+        location = driver_api.CustomizationOperate(self.helper, share, self.root).ensure_share()
         return location
 
     def extend_share(self, share, new_size, share_server):
         """苏研定制需求需要对二级目录实现扩容，因此重新此方法"""
-        driver_api.CustomizationOperate(self.helper, share).change_share(new_size, 'extend')
+        driver_api.CustomizationOperate(self.helper, share, self.root).change_share(new_size, 'extend')
 
     def shrink_share(self, share, new_size, share_server):
         """苏研定制需求需要对二级目录实现缩容，因此重新此方法"""
-        driver_api.CustomizationOperate(self.helper, share).change_share(new_size, 'shrink')
+        driver_api.CustomizationOperate(self.helper, share, self.root).change_share(new_size, 'shrink')

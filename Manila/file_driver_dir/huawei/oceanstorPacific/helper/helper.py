@@ -234,9 +234,9 @@ class RestHelper:
         result = self.call(url, data, "POST")
 
         if result.get('result', {}).get('code') == 0 and result.get("data"):
-            LOG.info(_("Create quote success. (quota_size: {0}GB)".format(quota_size)))
+            LOG.info(_("Create quota success. (quota_size: {0}GB)".format(quota_size)))
         else:
-            err_msg = _("Create quote failed.")
+            err_msg = _("Create quota failed.")
             raise exception.InvalidShare(reason=err_msg)
 
     def change_quota_size(self, quota_id, new_size):
@@ -419,7 +419,7 @@ class RestHelper:
         data = jsonutils.dumps(nfs_para)
         result = self.call(url, data, "GET")
 
-        if result.get('result', {}).get('code') == 0 and result.get('data'):
+        if result.get('result', {}).get('code') == 0:
             LOG.info(_("Query NFS share success.(account_id: {0})".format(account_id)))
         else:
             err_msg = _("Query NFS share failed.(account_id: {0})".format(account_id))
@@ -440,7 +440,7 @@ class RestHelper:
         data = jsonutils.dumps(cifs_para)
         result = self.call(url, data, "GET")
 
-        if result.get('result', {}).get('code') == 0 and result.get('data'):
+        if result.get('result', {}).get('code') == 0:
             LOG.info(_("Query CIFS share success.(account_id: {0})".format(account_id)))
         else:
             err_msg = _("Query CIFS share failed.(account_id: {0})".format(account_id))
@@ -536,11 +536,12 @@ class RestHelper:
     def allow_access_for_nfs(self, share_id, access_to, access_level, account_id):
         """This interface is used to add an NFS share client."""
 
+        access_value = 0 if access_level == 'ro' else 1
         url = "nas_protocol/nfs_share_auth_client"
         access_para = {
             'access_name': access_to,
             'share_id': share_id,
-            'access_value': 0 if access_level == 'ro' else 1,
+            'access_value': access_value,
             'sync': 1,
             'all_squash': 1,
             'root_squash': 1,
@@ -553,20 +554,60 @@ class RestHelper:
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Add an NFS share client success.(access_to: {0})".format(access_to)))
         elif result.get('result', {}).get('code') == constants.NFS_SHARE_CLIENT_EXIST:
-            LOG.info(_("Add an NFS share client already exist.(access_to: {0})".format(access_to)))
+            share_auth_info = self._query_nfs_share_clients_information(
+                0, [share_id, account_id], access_to).get('data', [])
+            if self._is_needed_change_access(share_auth_info, access_to, access_value, 'access_value'):
+                self.change_access_for_nfs(
+                    share_auth_info[0].get('id'), access_value, account_id)
         else:
             err_msg = _("Add an NFS shared client for share failed.(access_to: {0})".format(share_id))
             raise exception.InvalidShare(reason=err_msg)
+
+    @staticmethod
+    def _is_needed_change_access(share_auth_info, access_to, access_value, access_param):
+        if not share_auth_info:
+            err_msg = _("Add an NFS shared client for share failed.(access_to: {0})".format(
+                access_to))
+            raise exception.InvalidShare(reason=err_msg)
+        if share_auth_info[0].get(access_param) == access_value:
+            LOG.info(_("Add an share client already exist.(access_to: {0})".format(
+                access_to)))
+            return False
+
+        return True
+
+    def change_access_for_nfs(self, client_id, access_value, account_id):
+        """This interface is used to change a CIFS share auth client access_value."""
+        url = "nas_protocol/nfs_share_auth_client"
+        access_para = {
+            'id': client_id,
+            'access_value': access_value,
+            'sync': 1,
+            'all_squash': 1,
+            'root_squash': 1,
+            'account_id': account_id,
+        }
+        data = jsonutils.dumps(access_para)
+        result = self.call(url, data, "PUT")
+
+        if result.get('result', {}).get('code') == 0:
+            LOG.info(_("change an NFS share client success.(client id: {0})".format(client_id)))
+        else:
+            err_msg = _("change an NFS shared client for share failed.(client id: {0})".
+                        format(client_id))
+            raise exception.InvalidShare(reason=err_msg)
+        return result
 
     def allow_access_for_cifs(self, share_id, access_to, access_level, account_id):
         """This interface is used to add a CIFS share user or user group."""
 
         url = "file_service/cifs_share_auth_client"
+        access_value = 0 if access_level == 'ro' else 1
         query_para = {
             "share_id": share_id,
             "name": access_to,
             "domain_type": 2,
-            "permission": 0 if access_level == 'ro' else 1,
+            "permission": access_value,
             "account_id": account_id
         }
         data = jsonutils.dumps(query_para)
@@ -575,22 +616,52 @@ class RestHelper:
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Add an CIFS share user success.(access_to: {0})".format(access_to)))
         elif result.get('result', {}).get('code') == constants.CIFS_SHARE_CLIENT_EXIST:
-            LOG.info(_("Add an CIFS share user({0}) already exist.(access_to: {0})".format(access_to)))
+            share_auth_info = self._query_cifs_share_user_information(
+                0, [share_id, account_id], access_to).get('data', [])
+            if self._is_needed_change_access(share_auth_info, access_to,
+                                             access_value, 'permission'):
+                self.change_access_for_cifs(
+                    share_auth_info[0].get('id'), access_value, account_id)
         else:
             err_msg = _("Add an CIFS shared client for share failed.(access_to: {0})".format(share_id))
             raise exception.InvalidShare(reason=err_msg)
+
+    def change_access_for_cifs(self, client_id, access_value, account_id):
+        """This interface is used to change a CIFS share auth client permission."""
+        url = "file_service/cifs_share_auth_client"
+        access_para = {
+            "id": client_id,
+            "permission": access_value,
+            "account_id": account_id
+        }
+        data = jsonutils.dumps(access_para)
+        result = self.call(url, data, "PUT")
+
+        if result.get('result', {}).get('code') == 0:
+            LOG.info(_("change an CIFS share client success.(client id: {0})".format(
+                client_id)))
+        else:
+            err_msg = _("change an CIFS shared client for share failed.(client id: {0})".
+                        format(client_id))
+            raise exception.InvalidShare(reason=err_msg)
+        return result
 
     def query_nfs_share_clients_information(self, share_id, account_id=None):
         totals = self.get_total_info_by_offset(
             self._query_nfs_share_clients_information, [share_id, account_id])
         return totals
 
-    def _query_nfs_share_clients_information(self, offset, extra_param):
+    def _query_nfs_share_clients_information(self, offset, extra_param, access_name=None):
         """This interface is used to batch query NFS share client information."""
 
         url = "nas_protocol/nfs_share_auth_client_list"
+        if access_name is not None:
+            filter_str = "[{\"share_id\": \"%s\", \"access_name\": \"%s\"}]" % (
+                str(extra_param[0]), access_name)
+        else:
+            filter_str = "[{\"share_id\": \"%s\"}]" % str(extra_param[0])
         filter_para = {
-            "filter": "[{\"share_id\": \"%s\"}]" % str(extra_param[0]),
+            "filter": filter_str,
             "range": {
                 "offset": offset,
                 "limit": constants.MAX_QUERY_COUNT
@@ -614,12 +685,17 @@ class RestHelper:
             self._query_cifs_share_user_information, [share_id, account_id])
         return totals
 
-    def _query_cifs_share_user_information(self, offset, extra_param):
+    def _query_cifs_share_user_information(self, offset, extra_param, access_name=None):
         """This interface is used to query CIFS share users or user groups in batches."""
 
         url = "file_service/cifs_share_auth_client_list"
+        if access_name is not None:
+            filter_str = "[{\"share_id\": \"%s\", \"name\": \"like %s\"}]" % (
+                str(extra_param[0]), access_name)
+        else:
+            filter_str = "[{\"share_id\": \"%s\"}]" % str(extra_param[0])
         filter_para = {
-            "filter": "[{\"share_id\": \"%s\"}]" % str(extra_param[0]),
+            "filter": filter_str,
             "range": {
                 "offset": offset,
                 "limit": constants.MAX_QUERY_COUNT
@@ -884,11 +960,17 @@ class RestHelper:
         result = self.call(url, None, "DELETE")
 
         if result.get('result', {}).get('code') == 0:
-            LOG.info(_("Delete dtree of namespace success.(dtree_name: {0},"
-                       " namespace_name: {1})".format(dtree_name, namespace_name)))
+            LOG.info(_("Delete dtree of namespace success."
+                       "(dtree_name: {0}, namespace_name: {1})".
+                       format(dtree_name, namespace_name)))
         elif result.get('result', {}).get('code') == constants.NAMESPACE_NOT_EXIST:
-            LOG.info(_("the dtree {0} of namespace {1} does not exist.(dtree_name: {0}, "
-                       " namespace_name: {1})".format(dtree_name, namespace_name)))
+            LOG.info(_("theparent namespace {1}  of dtree {0} does not exist."
+                       "(dtree_name: {0},  namespace_name: {1})".
+                       format(namespace_name, dtree_name)))
+        elif result.get('result', {}).get('code') == constants.DTREE_NOT_EXIST:
+            LOG.info(_("the dtree {0} of namespace {1} does not exist."
+                       "(dtree_name: {0}, namespace_name: {1})".
+                       format(dtree_name, namespace_name)))
         else:
             err_msg = _("Delete dtree of namespace failed.(dtree_name: {0}, "
                         "namespace_name: {1})".format(dtree_name, namespace_name))
