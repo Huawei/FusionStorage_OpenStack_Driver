@@ -1026,9 +1026,9 @@ class RestHelper:
         data = jsonutils.dumps(query_para)
         result = self.call(url, data, "GET")
 
-        if result.get('result', {}).get('code') == 0 and result.get('data'):
+        if result.get('result', {}).get('code') == 0:
             LOG.info(_("Query dtree success.(dtree_name: {0})".format(dtree_name)))
-        elif result.get('result', {}).get('code') == constants.DTREE_NOT_EXIST and not result.get('data'):
+        elif result.get('result', {}).get('code') == constants.DTREE_NOT_EXIST or not result.get('data'):
             LOG.info(_("Query dtree does not exist.(dtree_name: {0})".format(dtree_name)))
         else:
             err_msg = _("Query dtree_name({0}) failed".format(dtree_name))

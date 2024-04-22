@@ -416,6 +416,11 @@ class CustomizationOperate(OperateShare):
             self.namespace_name = export_location.split('\\')[-1].split('/')[-1]
 
     def _get_dtree_quota_info(self, action, parent_id, new_size, parent_type):
+        if not parent_id:
+            error_msg = (_("%s share failed because of dtree not exist") % action)
+            LOG.error(error_msg)
+            raise exception.InvalidInput(reason=error_msg)
+
         dtree_quota = self.helper.query_quota_by_parent(parent_id, parent_type)
         cur_size = float(dtree_quota.get('space_used', 0.0)) / constants.CAPACITY_UNIT_BYTE_TO_GB
         cur_size = math.ceil(cur_size)
