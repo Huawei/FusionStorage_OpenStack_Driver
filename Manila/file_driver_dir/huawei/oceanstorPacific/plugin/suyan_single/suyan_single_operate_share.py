@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright (c) 2023 Huawei Technologies Co., Ltd.
+# Copyright (c) 2024 Huawei Technologies Co., Ltd.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -13,6 +13,7 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
+
 import math
 
 from oslo_log import log
@@ -20,26 +21,63 @@ from oslo_log import log
 from manila import exception
 from manila.i18n import _
 
-from .operate_share import OperateShare
-from .change_access import ChangeAccess
-from .check_update_storage import CheckUpdateStorage
-from ..helper import constants
+from ..community.community_operate_share import CommunityOperateShare
+from ...utils import constants
 
 LOG = log.getLogger(__name__)
 
 
-class CustomizationOperate(OperateShare):
-    def __init__(self, helper, share, root):
-        super(CustomizationOperate, self).__init__(helper, share, root)
-        self.share_parent_id = self.share.get('parent_share_id')
+class SuyanSingleOperateShare(CommunityOperateShare):
+    def __init__(self, client, share=None, driver_config=None,
+                 context=None, storage_features=None):
+        super(SuyanSingleOperateShare, self).__init__(
+            client, share, driver_config, context, storage_features)
+        self.share_parent_id = self._get_share_parent_id()
         self.dtree_name = None
         self.dtree_id = None
 
-    def create_share(self, free_pool):
-        if not self.share_parent_id:
-            return super(CustomizationOperate, self).create_share(free_pool)
+    @staticmethod
+    def get_impl_type():
+        return constants.PLUGIN_SUYAN_SINGLE_IMPL
 
-        self.free_pool = free_pool
+    @staticmethod
+    def _check_and_get_share_capacity(share_data):
+        if share_data.get("space_used") is None:
+            return {}
+
+        hard_limit = share_data.get("space_hard_quota")
+        used_space = share_data.get("space_used")
+
+        share_capacity = {
+            "hard_limit": str(hard_limit),
+            "used_space": str(used_space),
+            "avail_space": str(hard_limit - used_space)
+        }
+
+        if share_data.get('ssd_hard_quota') is None:
+            LOG.info("Share has no ssd quota, don't need return.")
+            return share_capacity
+
+        # get share tier capacity
+        ssd_hard_limit = share_data.get("ssd_hard_quota")
+        ssd_used_space = share_data.get("ssd_space_used")
+        hdd_hard_limit = share_data.get("hdd_hard_quota")
+        hdd_used_space = share_data.get("hdd_space_used")
+        share_capacity.update({
+            'ssd_hard_limit': str(ssd_hard_limit),
+            'ssd_used_space': str(ssd_used_space),
+            'ssd_avail_space': str(ssd_hard_limit - ssd_used_space),
+            'hdd_hard_limit': str(hdd_hard_limit),
+            'hdd_used_space': str(hdd_used_space),
+            'hdd_avail_space': str(hdd_hard_limit - hdd_used_space)
+        })
+
+        return share_capacity
+
+    def create_share(self):
+        if not self.share_parent_id:
+            return super(SuyanSingleOperateShare, self).create_share()
+
         self._check_domain()
         self._get_or_create_account()
         self._get_share_parent_info()
@@ -50,7 +88,7 @@ class CustomizationOperate(OperateShare):
 
     def change_share(self, new_size, action):
         if not self.share_parent_id:
-            return super(CustomizationOperate, self).change_share(new_size, action)
+            return super(SuyanSingleOperateShare, self).change_share(new_size, action)
 
         if (not self.share.get('export_locations') or not self.share.get(
                 'export_locations')[0].get('path')):
@@ -61,7 +99,7 @@ class CustomizationOperate(OperateShare):
         self._get_dtree_info()
         self._get_dtree_quota_info(action, self.dtree_id,
                                    new_size, constants.QUOTA_PARENT_TYPE_DTREE)
-        self.helper.change_quota_size(self.quota_id, new_size)
+        self.client.change_quota_size(self.quota_id, new_size)
         LOG.info("{0} share done. New size:{1}.".format(action, new_size))
         return True
 
@@ -80,7 +118,7 @@ class CustomizationOperate(OperateShare):
         self._get_namespace_name_for_qos()
 
         qos_name = self.namespace_name
-        qos_info = self.helper.query_qos_info_by_name(qos_name)
+        qos_info = self.client.query_qos_info_by_name(qos_name)
         if not qos_info.get("data"):
             self._create_qos_when_update_qos(qos_name)
         else:
@@ -109,7 +147,7 @@ class CustomizationOperate(OperateShare):
 
     def delete_share(self):
         if not self.share_parent_id:
-            return super(CustomizationOperate, self).delete_share()
+            return super(SuyanSingleOperateShare, self).delete_share()
 
         if (not self.share.get('export_locations') or not self.share.get(
                 'export_locations')[0].get('path')):
@@ -125,12 +163,12 @@ class CustomizationOperate(OperateShare):
             return False
 
         self._delete_dtree_share_protocol()
-        self.helper.delete_dtree(self.dtree_name, self.namespace_name)
+        self.client.delete_dtree(self.dtree_name, self.namespace_name)
         return True
 
     def ensure_share(self):
         if not self.share_parent_id:
-            return super(CustomizationOperate, self).ensure_share()
+            return super(SuyanSingleOperateShare, self).ensure_share()
 
         if (not self.share.get('export_locations') or not self.share.get(
                 'export_locations')[0].get('path')):
@@ -153,8 +191,8 @@ class CustomizationOperate(OperateShare):
         if tmp_max_band_width is None:
             self.qos_config['max_band_width'] = constants.MAX_BAND_WIDTH
         elif (tmp_max_band_width.strip().isdigit()
-                and 0 <= int(int(tmp_max_band_width.strip()) / constants.BYTE_TO_MB)
-                      <= constants.BAND_WIDTH_UPPER_LIMIT):
+              and 0 <= int(int(tmp_max_band_width.strip()) / constants.BYTE_TO_MB)
+              <= constants.BAND_WIDTH_UPPER_LIMIT):
             self.qos_config['max_band_width'] = int(math.ceil(float(
                 tmp_max_band_width.strip()) / constants.BYTE_TO_MB))
         else:
@@ -183,9 +221,9 @@ class CustomizationOperate(OperateShare):
     def _create_qos(self):
         qos_name = self.namespace_name
         try:
-            result = self.helper.create_qos_for_suyan(qos_name, self.account_id, self.qos_config)
+            result = self.client.create_qos_for_suyan(qos_name, self.account_id, self.qos_config)
             qos_policy_id = result.get('id')
-            self.helper.add_qos_association(self.namespace_name, qos_policy_id, self.account_id)
+            self.client.add_qos_association(self.namespace_name, qos_policy_id, self.account_id)
         except Exception as e:
             self._rollback_creat(2)
             raise e
@@ -195,19 +233,6 @@ class CustomizationOperate(OperateShare):
 
         export_location = self.share.get('export_locations')[0].get('path')
         self._get_namespace_name_from_location(export_location)
-
-    def _find_account_name(self, root=None):
-        LOG.info("Get account name from xml.")
-        if not root:
-            err_msg = _("Can not get account name from config.")
-            LOG.error(err_msg)
-            raise exception.InvalidShare(reason=err_msg)
-        account_name = root.findtext('Filesystem/AccountName').strip()
-        if not account_name:
-            err_msg = "Can not get account_name from xml, please check."
-            LOG.error(err_msg)
-            raise exception.InvalidShare(reason=err_msg)
-        return account_name
 
     def _get_update_qos_config(self, qos_specs):
         if qos_specs.get('total_bytes_sec') is None or \
@@ -223,8 +248,8 @@ class CustomizationOperate(OperateShare):
         if int(tmp_max_band_width) == 0:
             self.qos_config['max_band_width'] = constants.MAX_BAND_WIDTH
         elif (tmp_max_band_width.strip().isdigit()
-                and 0 <= int(int(tmp_max_band_width.strip()) / constants.BYTE_TO_MB)
-                      <= constants.BAND_WIDTH_UPPER_LIMIT):
+              and 0 <= int(int(tmp_max_band_width.strip()) / constants.BYTE_TO_MB)
+              <= constants.BAND_WIDTH_UPPER_LIMIT):
             self.qos_config['max_band_width'] = int(math.ceil(float(
                 tmp_max_band_width.strip()) / constants.BYTE_TO_MB))
 
@@ -237,21 +262,21 @@ class CustomizationOperate(OperateShare):
 
     def _create_qos_when_update_qos(self, qos_name):
         try:
-            result = self.helper.create_qos_for_suyan(qos_name, self.account_id, self.qos_config)
+            result = self.client.create_qos_for_suyan(qos_name, self.account_id, self.qos_config)
             qos_policy_id = result.get('id')
-            self.helper.add_qos_association(self.namespace_name, qos_policy_id, self.account_id)
+            self.client.add_qos_association(self.namespace_name, qos_policy_id, self.account_id)
         except Exception as e:
-            self.helper.delete_qos(self.namespace_name)
+            self.client.delete_qos(self.namespace_name)
             raise e
 
     def _update_qos(self, qos_name):
-        self.helper.change_qos_for_suyan(qos_name, self.account_id, self.qos_config)
+        self.client.change_qos_for_suyan(qos_name, self.account_id, self.qos_config)
 
     def _get_share_parent_info(self):
         """首先去存储查询父目录的命名空间信息，查询不到抛错"""
 
         self.namespace_name = 'share-' + self.share_parent_id
-        namespace_info = self.helper.query_namespace_by_name(self.namespace_name)
+        namespace_info = self.client.query_namespace_by_name(self.namespace_name)
         if namespace_info:
             LOG.info(_("Namespace({0}) found successfully.".format(self.namespace_name)))
             self.namespace_id = namespace_info.get('id')
@@ -266,7 +291,7 @@ class CustomizationOperate(OperateShare):
 
         self.dtree_name = 'share-' + self.share.get('share_id')
         try:
-            result = self.helper.create_dtree(self.dtree_name, self.namespace_name)
+            result = self.client.create_dtree(self.dtree_name, self.namespace_name)
             self.dtree_id = result.get('id')
         except Exception as e:
             self._rollback_dtree_creat(1)
@@ -277,7 +302,7 @@ class CustomizationOperate(OperateShare):
 
         quota_size = self.share.get('size')
         try:
-            self.helper.creat_quota(self.dtree_id, quota_size,
+            self.client.creat_quota(self.dtree_id, quota_size,
                                     constants.QUOTA_PARENT_TYPE_DTREE)
         except Exception as e:
             self._rollback_dtree_creat(1)
@@ -288,10 +313,10 @@ class CustomizationOperate(OperateShare):
 
         try:
             if 'NFS' in self.share_proto:
-                self.helper.create_dtree_nfs_share(
+                self.client.create_dtree_nfs_share(
                     self.namespace_name, self.dtree_name, self.account_id)
             if 'CIFS' in self.share_proto:
-                self.helper.create_dtree_cifs_share(
+                self.client.create_dtree_cifs_share(
                     self.namespace_name, self.dtree_name, self.account_id)
         except Exception as e:
             self._rollback_dtree_creat(2)
@@ -304,7 +329,7 @@ class CustomizationOperate(OperateShare):
         if level >= 2:
             self._delete_dtree_share_protocol()
         if level >= 1:
-            self.helper.delete_dtree(self.dtree_name, self.namespace_name)
+            self.client.delete_dtree(self.dtree_name, self.namespace_name)
 
         LOG.info(_("Rollback done."))
 
@@ -316,19 +341,19 @@ class CustomizationOperate(OperateShare):
         """
 
         if 'NFS' in self.share_proto:
-            result = self.helper.query_nfs_share_information(self.account_id, self.namespace_id, self.dtree_id)
+            result = self.client.query_nfs_share_information(self.account_id, self.namespace_id, self.dtree_id)
             for nfs_share in result:
                 if str(self.dtree_id) == nfs_share.get('dtree_id'):
                     nfs_share_id = nfs_share.get('id')
-                    self.helper.delete_nfs_share(nfs_share_id, self.account_id)
+                    self.client.delete_nfs_share(nfs_share_id, self.account_id)
                     break
         if 'CIFS' in self.share_proto:
-            result = self.helper.query_cifs_share_information(
+            result = self.client.query_cifs_share_information(
                 self.account_id, self.dtree_name)
             for cifs_share in result:
                 if str(self.dtree_name) == cifs_share.get('name'):
                     cifs_share_id = cifs_share.get('id')
-                    self.helper.delete_cifs_share(cifs_share_id, self.account_id)
+                    self.client.delete_cifs_share(cifs_share_id, self.account_id)
                     break
 
     def _get_dtree_location(self):
@@ -337,11 +362,13 @@ class CustomizationOperate(OperateShare):
         location = []
         share_path = self.namespace_name + '/' + self.dtree_name
         if 'NFS' in self.share_proto:
-            location.append('NFS:' + self.domain + ":/" + share_path)
+            nfs_path = self._get_nfs_path(self.domain + ":/" + share_path)
+            location.append('NFS:' + nfs_path)
         if 'CIFS' in self.share_proto:
             location.append('CIFS:\\\\' + self.domain + '\\' + share_path)
         if 'DPC' in self.share_proto:
-            location.append('DPC:/' + share_path)
+            dpc_path = self._get_dpc_path('/' + share_path)
+            location.append('DPC:' + dpc_path)
 
         return location
 
@@ -350,7 +377,7 @@ class CustomizationOperate(OperateShare):
 
         self.export_locations = self.share.get('export_locations')[0].get('path')
         self.namespace_name = self.export_locations.split('\\')[-1].split('/')[-2]
-        result = self.helper.query_namespace_by_name(self.namespace_name)
+        result = self.client.query_namespace_by_name(self.namespace_name)
         self.namespace_id = result.get('id')
         return result
 
@@ -359,7 +386,7 @@ class CustomizationOperate(OperateShare):
 
         self.export_locations = self.share.get('export_locations')[0].get('path')
         self.dtree_name = self.export_locations.split('\\')[-1].split('/')[-1]
-        result = self.helper.query_dtree_by_name(self.dtree_name, self.namespace_id)
+        result = self.client.query_dtree_by_name(self.dtree_name, self.namespace_id)
         for dtree_info in result:
             self.dtree_id = dtree_info.get('id')
             return True
@@ -376,21 +403,6 @@ class CustomizationOperate(OperateShare):
             return {}
 
         return self._check_and_get_share_capacity(share_info)
-
-    @staticmethod
-    def _check_and_get_share_capacity(share_data):
-        if share_data.get("space_used") is None:
-            return {}
-
-        hard_limit = int(share_data.get("space_hard_quota"))
-        used_space = int(share_data.get("space_used"))
-
-        share_capacity = {
-            "hard_limit": str(hard_limit),
-            "used_space": str(used_space),
-            "avail_space": str(hard_limit - used_space)
-        }
-        return share_capacity
 
     def _get_namespace_name_for_qos(self):
         """
@@ -417,11 +429,11 @@ class CustomizationOperate(OperateShare):
 
     def _get_dtree_quota_info(self, action, parent_id, new_size, parent_type):
         if not parent_id:
-            error_msg = (_("%s share failed because of dtree not exist") % action)
+            error_msg = (_("%s share fail for because of dtree not exist") % action)
             LOG.error(error_msg)
             raise exception.InvalidInput(reason=error_msg)
 
-        dtree_quota = self.helper.query_quota_by_parent(parent_id, parent_type)
+        dtree_quota = self.client.query_quota_by_parent(parent_id, parent_type)
         cur_size = float(dtree_quota.get('space_used', 0.0)) / constants.CAPACITY_UNIT_BYTE_TO_GB
         cur_size = math.ceil(cur_size)
 
@@ -431,109 +443,3 @@ class CustomizationOperate(OperateShare):
         if (action == 'Shrink') and (cur_size > new_size):
             err_msg = (_("Shrink share fail for space used({0}G) > new sizre({1}G)".format(cur_size, new_size)))
             raise exception.InvalidInput(reason=err_msg)
-
-
-class CustomizationChangeAccess(ChangeAccess):
-    def __init__(self, helper, share, root):
-        super(CustomizationChangeAccess, self).__init__(helper, share, root)
-        self.share_parent_id = self.share.get('parent_share_id')
-        self.dtree_name = None
-        self.dtree_id = None
-
-    def update_access(self, access_rules, add_rules, delete_rules):
-        """如果传入的参数包含parent_share_id，则走二级目录的流程"""
-
-        if not self.share_parent_id:
-            return super(CustomizationChangeAccess, self).update_access(
-                access_rules, add_rules, delete_rules)
-
-        self._get_account_and_share_related_information()
-        self._update_access_for_share(access_rules, add_rules, delete_rules)
-
-        return True
-
-    def allow_access(self, access):
-        """如果传入的参数包含parent_share_id，则走二级目录的流程"""
-
-        if not self.share_parent_id:
-            return super(CustomizationChangeAccess, self).allow_access(access)
-
-        self._get_account_and_share_related_information()
-        self._classify_rules([access], 'allow')
-        return True
-
-    def deny_access(self, access):
-        """如果传入的参数包含parent_share_id，则走二级目录的流程"""
-
-        if not self.share_parent_id:
-            return super(CustomizationChangeAccess, self).deny_access(access)
-
-        self._get_account_and_share_related_information()
-        self._classify_rules([access], 'deny')
-        return True
-
-    def _get_account_and_share_related_information(self):
-        """二级目录场景下，share_path需要包含dtree名称"""
-        self._get_account_id()
-        self._get_export_location_info()
-        self._get_dtree_share_related_info()
-        self._query_and_set_share_info(self.dtree_id, self.dtree_name)
-
-    def _get_dtree_share_related_info(self):
-        """二级目录场景下，需要获取命名空间和dtree的名称"""
-
-        self.namespace_name = self.export_locations.split('\\')[-1].split('/')[-2]
-        self.dtree_name = self.export_locations.split('\\')[-1].split('/')[-1]
-        self.share_path = '/' + self.namespace_name + '/' + self.dtree_name
-        namespace_info = self.helper.query_namespace_by_name(
-            self.namespace_name)
-        self.namespace_id = namespace_info.get('id')
-        dtree_info = self.helper.query_dtree_by_name(
-            self.dtree_name, self.namespace_id)
-        for info in dtree_info:
-            self.dtree_id = info.get('id')
-
-
-class CustomizationChangeCheckUpdateStorage(CheckUpdateStorage):
-    def __init__(self, helper, root):
-        super(CustomizationChangeCheckUpdateStorage, self).__init__(helper, root)
-
-    def _get_all_share_usages(self, all_namespace_info):
-        """
-        1. 将所有的命名空间信息和其名称组成键值对
-        2. 通过命名空间名称获取它所有的dtree信息
-        3. 根据dtree信息获取配额信息
-        """
-
-        all_share_usages = {}
-        for namespace in all_namespace_info:
-            all_share_usages[namespace.get('name')] = {
-                'id': namespace.get('id'),
-                'name': namespace.get('name'),
-                'space_used': namespace.get(
-                    'space_used', 0.0) * constants.CAPACITY_UNIT_BYTE_TO_KB,
-                'space_hard_quota': namespace.get(
-                    'space_hard_quota', 0.0) * constants.CAPACITY_UNIT_BYTE_TO_KB
-            }
-            all_dtree_info = self.helper.get_all_dtree_info_of_namespace(namespace.get('id'))
-            for dtree_info in all_dtree_info:
-                dtree_quota = self.helper.query_quota_by_parent(
-                    dtree_info.get('id'), constants.QUOTA_PARENT_TYPE_DTREE)
-                dtree_info['spaced_used'] = dtree_quota.get('space_used', 0.0)
-                dtree_info['space_hard_quota'] = dtree_quota.get('space_hard_quota', 0.0)
-                all_share_usages[dtree_info.get('name')] = {
-                    'id': dtree_info.get('id'),
-                    'name': dtree_info.get('name'),
-                    'space_used': dtree_quota.get('space_used', 0.0),
-                    'space_hard_quota': dtree_quota.get('space_hard_quota', 0.0)
-                }
-
-        LOG.info("successfully get all share usages")
-        return all_share_usages
-
-    def get_all_share_usage(self):
-        """苏研定制接口，获取对应帐户下所有的share信息"""
-        LOG.info("begin to query all share usages")
-        self._get_account_id()
-        all_namespace_info = self.helper.get_all_namespace_info(self.account_id)
-        return self._get_all_share_usages(all_namespace_info)

@@ -9,12 +9,21 @@
 		<SslCertVerify>True</SslCertVerify>
 		<Reserved_percentage>15</Reserved_percentage>
 		<Max_over_subscription_ratio>1</Max_over_subscription_ratio>
+		<Semaphore>10</Semaphore>
+		<HotDiskType>ssd</HotDiskType>
+		<WarmDiskType>sas</WarmDiskType>
+		<ColdDiskType>sata</ColdDiskType>
     </Storage>
-<HypermetroDevice />
 	<Filesystem>
 		<StoragePool>0</StoragePool>
 		<AllocType>Thin</AllocType>
 		<AccountName>test-account</AccountName>
 		<ClusterDomainName>nfs-ip</ClusterDomainName>
 	</Filesystem>
+	<DPC>
+		<MountOption>cid={sn},rw</MountOption>
+	</DPC>
+	<NFS>
+		<MountOption>nfsvers=3</MountOption>
+	</NFS>
 </config>
