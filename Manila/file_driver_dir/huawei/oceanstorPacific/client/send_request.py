@@ -1,5 +1,18 @@
 # coding=utf-8
 # Copyright (c) 2021 Huawei Technologies Co., Ltd.
+# All Rights Reserved.
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
 
 import ssl
 import time
@@ -12,18 +25,36 @@ from six.moves.urllib import request as urlreq
 from manila import exception
 from manila.i18n import _
 
-from . import constants
+from ..utils import constants
 
 LOG = log.getLogger(__name__)
 
 
 class SendRequest:
-    def __init__(self, root):
-        self.root = root
+    def __init__(self, driver_config):
+        self.driver_config = driver_config
         self.login_info = {}
         self.headers = {}
         self.url = None
         self.cookie = None
+
+    @staticmethod
+    def _get_error_code(ex_url, result):
+        error_code = None
+        result_obj = result['result']
+        if ex_url:
+            error_code = result_obj
+            if error_code == 2:
+                error_code = int(result['errorCode'])
+        elif 'error' in result.keys():
+            error_code = result['error']['code']
+        elif 'result' in result.keys():
+            if isinstance(result_obj, int):
+                error_code = result_obj
+            elif isinstance(result_obj, dict):
+                error_code = result_obj['code']
+
+        return int(error_code)
 
     def call(self, url=None, data=None, method=None, ex_url=None, log_call=True):
         """Send requests to server.if fail, try another RestURL."""
@@ -117,14 +148,14 @@ class SendRequest:
         """Get login IP, username and password from config file."""
 
         login_info = {}
-        login_info['RestURL'] = self.root.findtext('Storage/RestURL').strip()
-        login_info['UserName'] = self.root.findtext('Storage/UserName').strip()
-        pwd = self.root.findtext('Storage/UserPassword').strip()
+        login_info['RestURL'] = self.driver_config.rest_url
+        login_info['UserName'] = self.driver_config.user_name
+        pwd = self.driver_config.user_password
         login_info['UserPassword'] = pwd
 
-        ssl_verify = self.root.findtext('Storage/SslCertVerify')
+        ssl_verify = self.driver_config.ssl_verify
         login_info['SslCertVerify'] = strutils.bool_from_string(ssl_verify, default=True)
-        ssl_path = self.root.findtext('Storage/SslCertPath')
+        ssl_path = self.driver_config.ssl_cert_path
         login_info['SslCertPath'] = ssl_path
 
         self.login_info = login_info
@@ -165,19 +196,3 @@ class SendRequest:
             return False
         else:
             return True
-
-    def _get_error_code(self, ex_url, result):
-        error_code = None
-        if ex_url:
-            error_code = result['result']
-            if error_code == 2:
-                error_code = int(result['errorCode'])
-        elif 'error' in result.keys():
-            error_code = result['error']['code']
-        elif 'result' in result.keys():
-            if isinstance(result['result'], int):
-                error_code = result['result']
-            elif isinstance(result['result'], dict):
-                error_code = result['result']['code']
-
-        return int(error_code)

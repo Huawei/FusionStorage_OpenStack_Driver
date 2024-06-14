@@ -1,4 +1,5 @@
-# Copyright (c) 2021 Huawei Technologies Co., Ltd.
+# coding=utf-8
+# Copyright (c) 2024 Huawei Technologies Co., Ltd.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -15,22 +16,23 @@
 
 """Huawei Nas Driver for Huawei storage arrays."""
 
-from xml.etree import ElementTree as ET
 from oslo_config import cfg
 from oslo_log import log
-from oslo_utils import importutils
 
 from manila import exception
 from manila.i18n import _
 from manila.share import driver
 
+from .plugin.change_access import ChangeAccess
+from .plugin.check_update_storage import CheckUpdateStorage
+from .plugin.operate_share import OperateShare
+from .plugin.plugin_factory import PluginFactory
+from .utils import constants
+
 huawei_opts = [
     cfg.StrOpt('manila_huawei_conf_file',
                default='/etc/manila/manila_huawei_conf.xml',
                help='The configuration file for the Manila Huawei driver.')]
-
-HUAWEI_UNIFIED_DRIVER_REGISTRY = {
-    'Pacific': 'manila.share.drivers.huawei.oceanstorPacific.connection.OceanStorPacificStorageConnection'}
 
 CONF = cfg.CONF
 CONF.register_opts(huawei_opts)
@@ -47,54 +49,32 @@ class HuaweiNasDriver(driver.ShareDriver):
         super(HuaweiNasDriver, self).__init__(False, *args, **kwargs)
         self.configuration = kwargs.get('configuration', None)
         self.ipv6_implemented = True
+        self.storage_features = {}
+        self.cluster_sn = None
         if self.configuration:
             self.configuration.append_config_values(huawei_opts)
-            backend_driver, root = self._get_backend_driver()
-            self.plugin = importutils.import_object(backend_driver, root)
+            self.plugin_factory = PluginFactory(self.configuration,
+                                                self._get_plugin_impl_type)
         else:
             err_msg = (_("Huawei configuration missing."))
             raise exception.InvalidShare(reason=err_msg)
 
     @staticmethod
-    def _get_backend_driver_class(backend_key=None):
-
-        backend_driver = HUAWEI_UNIFIED_DRIVER_REGISTRY.get(backend_key)
-        if backend_driver is None:
-            err_msg = (_("Product {0} is not supported. Product must be set to Pacific.".format(product)))
-            raise exception.InvalidInput(reason=err_msg)
-        return backend_driver
-
-    def _get_backend_driver(self):
-
-        filename = self.configuration.manila_huawei_conf_file
-        try:
-            tree = ET.parse(filename)
-            root = tree.getroot()
-            LOG.info(_("Read Huawei config file({0}) for Manila success.".format(filename)))
-        except Exception:
-            err_msg = (_("Read Huawei config file({0}) for Manila error.".format(filename)))
-            raise exception.InvalidInput(reason=err_msg)
-
-        product = root.findtext('Storage/Product').strip()
-        if product is None:
-            err_msg = (_("Can't find 'Storage/Product' in config file({0}).".format(filename)))
-            raise exception.InvalidInput(reason=err_msg)
-
-        backend_driver = self._get_backend_driver_class(product)
-        return backend_driver, root
+    def _get_plugin_impl_type(backend_key=None):
+        return constants.PLUGIN_COMMUNITY_IMPL
 
     def check_for_setup_error(self):
         """Check for setup error."""
 
-        LOG.info("********************Check conf file and service.********************")
-        self.plugin.check_conf_file()
-        self.plugin.check_service()
+        LOG.info("********************Check conf file and plugin.********************")
+        self.plugin_factory.instance_service(CheckUpdateStorage, None).check_service()
 
     def do_setup(self, context):
         """Initialize the huawei nas driver while starting."""
 
         LOG.info("********************Do setup the driver.********************")
-        self.plugin.connect()
+        self.plugin_factory.reset_client()
+        self.cluster_sn = self.plugin_factory.get_esn()
         self.get_share_stats(True)
 
     def get_share_stats(self, refresh=False):
@@ -106,6 +86,72 @@ class HuaweiNasDriver(driver.ShareDriver):
         if refresh:
             self._update_share_stats()
         return self._stats
+
+    def get_configured_ip_versions(self):
+        return self.get_configured_ip_version()
+
+    def get_configured_ip_version(self):
+        return [4, 6] if self.ipv6_implemented else [4]
+
+    def create_share(self, context, share, share_server=None):
+        """Create a share."""
+
+        LOG.info("********************Create a share.********************")
+        location = self.plugin_factory.instance_service(
+            OperateShare, share, self.storage_features, context).create_share()
+
+        return location
+
+    def delete_share(self, context, share, share_server=None):
+        """Delete a share."""
+
+        LOG.info("********************Delete a share.********************")
+        self.plugin_factory.instance_service(
+            OperateShare, share, self.storage_features, context).delete_share()
+
+    def extend_share(self, share, new_size, share_server=None):
+        """Extend a share."""
+
+        LOG.info("********************Extend a share.********************")
+        self.plugin_factory.instance_service(
+            OperateShare, share, self.storage_features).change_share(new_size, 'extend')
+
+    def shrink_share(self, share, new_size, share_server=None):
+        """Shrink a share."""
+
+        LOG.info("********************Shrink a share.********************")
+        self.plugin_factory.instance_service(
+            OperateShare, share, self.storage_features).change_share(new_size, 'shrink')
+
+    def ensure_share(self, context, share, share_server=None):
+        """Ensure the share is valid."""
+
+        LOG.info("********************Ensure a share.********************")
+        return self.plugin_factory.instance_service(
+            OperateShare, share, self.storage_features, context).ensure_share()
+
+    def allow_access(self, context, share, access, share_server=None):
+        """Allow access to the share."""
+
+        LOG.info("********************Allow access.********************")
+        self.plugin_factory.instance_service(
+            ChangeAccess, share, self.storage_features, context).allow_access(access)
+
+    def deny_access(self, context, share, access, share_server=None):
+        """Deny access to the share."""
+
+        LOG.info("********************Deny access.********************")
+        self.plugin_factory.instance_service(
+            ChangeAccess, share, self.storage_features, context).deny_access(access)
+
+    def update_access(self, context, share, access_rules,
+                      add_rules=None, delete_rules=None, share_server=None):
+        """Update access rules list."""
+
+        LOG.info("********************Update access.********************")
+        self.plugin_factory.instance_service(
+            ChangeAccess, share, self.storage_features, context).update_access(
+            access_rules, add_rules, delete_rules)
 
     def _update_share_stats(self):
         """Retrieve status info from share group."""
@@ -122,60 +168,12 @@ class HuaweiNasDriver(driver.ShareDriver):
             total_capacity_gb=0.0,
             free_capacity_gb=0.0,
             ipv6_support=True)
-        self.plugin.update_share_stats(data)
+        self.plugin_factory.instance_service(CheckUpdateStorage, None).update_storage_pool(data)
+        self._set_storage_features(data)
         super(HuaweiNasDriver, self)._update_share_stats(data)
 
-    def get_configured_ip_versions(self):
-        return self.get_configured_ip_version()
-
-    def get_configured_ip_version(self):
-        return [4, 6] if self.ipv6_implemented else [4]
-
-    def create_share(self, context, share, share_server=None):
-        """Create a share."""
-
-        LOG.info("********************Create a share.********************")
-        location = self.plugin.create_share(context, share, share_server)
-        return location
-
-    def delete_share(self, context, share, share_server=None):
-        """Delete a share."""
-
-        LOG.info("********************Delete a share.********************")
-        self.plugin.delete_share(context, share, share_server)
-
-    def extend_share(self, share, new_size, share_server=None):
-        """Extend a share."""
-
-        LOG.info("********************Extend a share.********************")
-        self.plugin.extend_share(share, new_size, share_server)
-
-    def shrink_share(self, share, new_size, share_server=None):
-        """Shrink a share."""
-
-        LOG.info("********************Shrink a share.********************")
-        self.plugin.shrink_share(share, new_size, share_server)
-
-    def ensure_share(self, context, share, share_server=None):
-        """Ensure the share is valid."""
-
-        LOG.info("********************Ensure a share.********************")
-        return self.plugin.ensure_share(share, share_server)
-
-    def allow_access(self, context, share, access, share_server=None):
-        """Allow access to the share."""
-
-        LOG.info("********************Allow access.********************")
-        self.plugin.allow_access(share, access, share_server)
-
-    def deny_access(self, context, share, access, share_server=None):
-        """Deny access to the share."""
-
-        LOG.info("********************Deny access.********************")
-        self.plugin.deny_access(share, access, share_server)
-
-    def update_access(self, context, share, access_rules, add_rules=None, delete_rules=None, share_server=None):
-        """Update access rules list."""
-
-        LOG.info("********************Update access.********************")
-        self.plugin.update_access(share, access_rules, add_rules, delete_rules, share_server)
+    def _set_storage_features(self, storage_data):
+        storage_pools = storage_data.get('pools')
+        for pool_info in storage_pools:
+            self.storage_features['sn'] = self.cluster_sn
+            self.storage_features[pool_info.get('pool_name')] = pool_info
