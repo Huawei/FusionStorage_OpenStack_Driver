@@ -37,6 +37,25 @@ class DMEClient(RestClient):
         self.login_url = self.base_url + constants.DME_LOGIN_URL
 
     @staticmethod
+    def get_total_info_by_offset(func, extra_param):
+        """
+        Call the func interface cyclically to obtain the information in "data",
+        combine it into a list and return it.
+        which is used in the paging query interface
+        """
+
+        offset = 1
+        total_info = []
+        while True:
+            result = func(offset, extra_param)
+            data_info = result.get("data", [])
+            total_info = total_info + data_info
+            if len(data_info) < constants.DME_GFS_MAX_PAGE_COUNT:
+                break
+            offset += 1
+        return total_info
+
+    @staticmethod
     def _error_code(res):
         """
         get http status code and
@@ -325,3 +344,60 @@ class DMEClient(RestClient):
         result = self.call(url, data=gfs_query_param, method='POST')
         self._assert_result(result, 'Query GFS info failed,')
         return result.get('data', [])
+
+    def get_tier_migration_policies_by_name_locator(self, name_locator):
+        url = '/rest/fileservice/v1/gfs/tier-migration-policies/query'
+        param = {
+            'name_locator': name_locator
+        }
+        result = self.call(url, data=param, method='POST')
+        self._assert_result(result, 'Query GFS tier migration policies failed,')
+        return result.get('data', [])
+
+    def create_tier_migration_policie(self, param):
+        url = '/rest/fileservice/v1/gfs/tier-migration-policies'
+        result = self.call(url, data=param, method='POST')
+        self._assert_result(result, 'Create GFS tier migration policies failed,')
+        return result
+
+    def delete_tier_migration_policie_by_name_locator(self, name_locator):
+        url = '/rest/fileservice/v1/gfs/tier-migration-policies/delete'
+        param = {
+            'name_locator': name_locator
+        }
+        result = self.call(url, data=param, method='POST')
+        self._assert_result(result, 'Delete GFS tier migration policies failed,')
+        return result
+
+    def get_all_gfs_capacities_info(self, cluster_name):
+        totals = self.get_total_info_by_offset(
+            self._get_gfs_capacities_info, cluster_name)
+        return totals
+
+    def get_all_gfs_dtree_capacities_info(self, cluster_name):
+        totals = self.get_total_info_by_offset(
+            self._get_gfs_dtree_capacities_info, cluster_name)
+        return totals
+
+
+    def _get_gfs_capacities_info(self, offset, cluster_name):
+        gfs_query_param = {
+            'cluster_classification_name': cluster_name,
+            'page_no': offset,
+            'page_size': constants.DME_GFS_MAX_PAGE_COUNT
+        }
+        url = '/rest/fileservice/v1/gfs/capacities/query'
+        result = self.call(url, data=gfs_query_param, method='POST')
+        self._assert_result(result, 'Get GFS capacities info failed,')
+        return result
+
+    def _get_gfs_dtree_capacities_info(self, offset, cluster_name):
+        dtree_query_param = {
+            'cluster_classification_name': cluster_name,
+            'page_no': offset,
+            'page_size': constants.DME_GFS_MAX_PAGE_COUNT
+        }
+        url = '/rest/fileservice/v1/gfs/dtrees/capacities/query'
+        result = self.call(url, data=dtree_query_param, method='POST')
+        self._assert_result(result, 'Get Dtrees capacities info failed,')
+        return result

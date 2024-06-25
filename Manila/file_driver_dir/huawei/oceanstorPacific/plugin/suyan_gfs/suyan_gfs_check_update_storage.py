@@ -35,6 +35,12 @@ class SuyanGFSCheckUpdateStorage(CheckUpdateStorage):
     def get_impl_type():
         return constants.PLUGIN_SUYAN_GFS_IMPL
 
+    @staticmethod
+    def _get_tier_capacity(size, size_unit):
+        if not size_unit:
+            size_unit = constants.CAP_KB
+        return driver_utils.convert_capacity(float(size), size_unit, constants.CAP_BYTE)
+
     def check_service(self):
         pass
 
@@ -94,4 +100,54 @@ class SuyanGFSCheckUpdateStorage(CheckUpdateStorage):
         return pool_capabilities
 
     def get_all_share_usage(self):
-        pass
+        """获取所有GFS和Dtree对应ssd容量信息+hdd信息+总容量信息"""
+        name_key = 'name'
+        space_used_key = 'space_used'
+        LOG.info("begin to query all share usages")
+        self._get_storage_pool_name()
+        all_share_usages = {}
+        gfs_capacities_infos = self.client.get_all_gfs_capacities_info(self.storage_pool_name)
+        dtrees_capacities_infos = self.client.get_all_gfs_dtree_capacities_info(self.storage_pool_name)
+        for gfs_capacity in gfs_capacities_infos:
+            gfs_name = gfs_capacity.get(name_key)
+            quota = gfs_capacity.get('quota').get('directory_quota', {})
+            unit_type = quota.get('unit_type', constants.CAP_KB)
+            all_share_usages[gfs_name] = {
+                space_used_key: self._get_tier_capacity(quota.get(space_used_key, 0), unit_type),
+                'space_hard_quota': self._get_tier_capacity(quota.get('hard_quota', 0), unit_type)
+            }
+            self._check_and_set_tier_quota(gfs_capacity, all_share_usages, name_key)
+
+        for dtree_capacities in dtrees_capacities_infos:
+            dtree_name = dtree_capacities.get(name_key)
+            quota = dtree_capacities.get('quota').get('directory_quota', {})
+            unit_type = quota.get('unit_type', constants.CAP_KB)
+            all_share_usages[dtree_name] = {
+                space_used_key: self._get_tier_capacity(quota.get(space_used_key, 0), unit_type),
+                'space_hard_quota': self._get_tier_capacity(quota.get('hard_quota', 0), unit_type),
+            }
+
+        LOG.info("successfully get all share usages")
+        return all_share_usages
+
+    def _check_and_set_tier_quota(self, gfs_info, all_share_usages, name_key):
+        """判断gfs是否设置ssd和hhd，如果设置则获取ssd和hhd的容量信息"""
+        gfs_name = gfs_info.get(name_key)
+        disk_pool_limit = gfs_info.get('disk_pool_limit', {})
+        if not disk_pool_limit:
+            LOG.info("Gfs %s not set hot_data_size, don't return ssd and hhd "
+                     "capacity", gfs_name)
+            return all_share_usages
+        ssd_hard_quota = self._get_tier_capacity(disk_pool_limit.get('tier_hot_limit', 0), constants.CAP_KB)
+        hdd_hard_quota = self._get_tier_capacity(disk_pool_limit.get('tier_cold_limit', 0), constants.CAP_KB)
+        ssd_space_used = self._get_tier_capacity(disk_pool_limit.get('tier_hot_used', 0), constants.CAP_KB)
+        hdd_space_used = self._get_tier_capacity(disk_pool_limit.get('tier_cold_used', 0), constants.CAP_KB)
+        all_share_usages.get(gfs_name).update(
+            {
+                'ssd_hard_quota': ssd_hard_quota,
+                'hdd_hard_quota': hdd_hard_quota,
+                'ssd_space_used': ssd_space_used,
+                'hdd_space_used': hdd_space_used
+            }
+        )
+        return all_share_usages
