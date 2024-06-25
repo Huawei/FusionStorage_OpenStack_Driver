@@ -103,7 +103,9 @@ class SuyanSingleShareTier(ShareTier):
         else:
             return {
                 "tier_status": migrate_policy.get("policy_status"),
-                "tier_process": migrate_policy.get("migration_percent")
+                "tier_process": migrate_policy.get("migration_percent"),
+                "tier_type": self._pacific_tier_grade_to_enum_suyan_str(migrate_policy.get("strategy")),
+                "tier_path": migrate_policy.get("path_name")
             }
 
     def terminate_share_tier(self):
@@ -122,6 +124,18 @@ class SuyanSingleShareTier(ShareTier):
         else:
             migrate_policy_id = migrate_policy.get('id')
             self.client.delete_tier_migrate_policy_by_id(migrate_policy_id, self.account_id)
+
+    def _pacific_tier_grade_to_enum_suyan_str(self, strategy):
+        # 0：热，1：温，2：冷，3：迁到异构设备，4：异构设备取回。
+        strategy_map = {
+            0: 'Preheat',
+            2: 'Precool'
+        }
+        res = strategy_map.get(strategy)
+        if not res:
+            err_msg = _("unknown strategy {0}".format(strategy))
+            raise exception.InvalidShare(reason=err_msg)
+        return res
 
     def _handle_tier_migrate_policy(self, namespace_name, namespace_id, namespace_pool_id, new_share):
         # 找最小level

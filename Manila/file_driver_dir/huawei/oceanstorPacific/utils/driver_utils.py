@@ -95,6 +95,7 @@ def wait_for_condition(func, interval, timeout):
 
 def convert_capacity(cap, org_unit, tgt_unit):
     unit_list = [
+        constants.CAP_BYTE,
         constants.CAP_KB,
         constants.CAP_MB,
         constants.CAP_GB,

@@ -22,7 +22,7 @@ from manila import exception
 from manila.i18n import _
 
 from ..community.community_operate_share import CommunityOperateShare
-from ...utils import constants
+from ...utils import constants, driver_utils
 
 LOG = log.getLogger(__name__)
 
@@ -39,40 +39,6 @@ class SuyanSingleOperateShare(CommunityOperateShare):
     @staticmethod
     def get_impl_type():
         return constants.PLUGIN_SUYAN_SINGLE_IMPL
-
-    @staticmethod
-    def _check_and_get_share_capacity(share_data):
-        if share_data.get("space_used") is None:
-            return {}
-
-        hard_limit = share_data.get("space_hard_quota")
-        used_space = share_data.get("space_used")
-
-        share_capacity = {
-            "hard_limit": str(hard_limit),
-            "used_space": str(used_space),
-            "avail_space": str(hard_limit - used_space)
-        }
-
-        if share_data.get('ssd_hard_quota') is None:
-            LOG.info("Share has no ssd quota, don't need return.")
-            return share_capacity
-
-        # get share tier capacity
-        ssd_hard_limit = share_data.get("ssd_hard_quota")
-        ssd_used_space = share_data.get("ssd_space_used")
-        hdd_hard_limit = share_data.get("hdd_hard_quota")
-        hdd_used_space = share_data.get("hdd_space_used")
-        share_capacity.update({
-            'ssd_hard_limit': str(ssd_hard_limit),
-            'ssd_used_space': str(ssd_used_space),
-            'ssd_avail_space': str(ssd_hard_limit - ssd_used_space),
-            'hdd_hard_limit': str(hdd_hard_limit),
-            'hdd_used_space': str(hdd_used_space),
-            'hdd_avail_space': str(hdd_hard_limit - hdd_used_space)
-        })
-
-        return share_capacity
 
     def create_share(self):
         if not self.share_parent_id:
@@ -185,20 +151,10 @@ class SuyanSingleOperateShare(CommunityOperateShare):
              “total_bytes_sec”：总吞吐量，单位Byte/s
              “total_iops_sec”： 总IOPS，单位个/s
         此处解析 max_band_width，从total_bytes_sec获取
+        临时方案先统一将qos设置为无限制
         """
         # the total_bytes_sec is Byte/s the pacific need MB/s
-        tmp_max_band_width = extra_specs.get('pacific:total_bytes_sec')
-        if tmp_max_band_width is None:
-            self.qos_config['max_band_width'] = constants.MAX_BAND_WIDTH
-        elif (tmp_max_band_width.strip().isdigit()
-              and 0 <= int(int(tmp_max_band_width.strip()) / constants.BYTE_TO_MB)
-              <= constants.BAND_WIDTH_UPPER_LIMIT):
-            self.qos_config['max_band_width'] = int(math.ceil(float(
-                tmp_max_band_width.strip()) / constants.BYTE_TO_MB))
-        else:
-            err_msg = _("The total_bytes_sec in share type "
-                        "must be int([0, %s]).") % constants.BAND_WIDTH_UPPER_LIMIT
-            raise exception.InvalidInput(reason=err_msg)
+        self.qos_config['max_band_width'] = constants.QOS_UNLIMITED
 
     def _get_max_iops_qos_config(self, extra_specs):
         """
@@ -206,17 +162,9 @@ class SuyanSingleOperateShare(CommunityOperateShare):
              “total_bytes_sec”：总吞吐量，单位Byte/s
              “total_iops_sec”： 总IOPS，单位个/s
         此处解析 max_iops，从total_iops_sec获取
+        临时方案先统一将qos设置为无限制
         """
-        tmp_max_iops = extra_specs.get('pacific:total_iops_sec')
-        if tmp_max_iops is None:
-            self.qos_config['max_iops'] = constants.MAX_IOPS
-        elif tmp_max_iops.strip().isdigit() \
-                and 0 <= int(tmp_max_iops.strip()) <= constants.MAX_IOPS_UPPER_LIMIT:
-            self.qos_config['max_iops'] = int(tmp_max_iops.strip())
-        else:
-            err_msg = _("The max_iops in share type "
-                        "must be int([0, %s]).") % constants.MAX_IOPS_UPPER_LIMIT
-            raise exception.InvalidInput(reason=err_msg)
+        self.qos_config['max_iops'] = constants.QOS_UNLIMITED
 
     def _create_qos(self):
         qos_name = self.namespace_name
@@ -235,6 +183,7 @@ class SuyanSingleOperateShare(CommunityOperateShare):
         self._get_namespace_name_from_location(export_location)
 
     def _get_update_qos_config(self, qos_specs):
+        # total_bytes_sec and total_iops_sec must be exist
         if qos_specs.get('total_bytes_sec') is None or \
                 qos_specs.get('total_iops_sec') is None:
             err_msg = "Can not get qos config when update_qos," \
@@ -244,21 +193,21 @@ class SuyanSingleOperateShare(CommunityOperateShare):
             LOG.error(err_msg)
             raise exception.InvalidShare(reason=err_msg)
 
-        tmp_max_band_width = str(qos_specs.get('total_bytes_sec'))
-        if int(tmp_max_band_width) == 0:
-            self.qos_config['max_band_width'] = constants.MAX_BAND_WIDTH
-        elif (tmp_max_band_width.strip().isdigit()
-              and 0 <= int(int(tmp_max_band_width.strip()) / constants.BYTE_TO_MB)
-              <= constants.BAND_WIDTH_UPPER_LIMIT):
-            self.qos_config['max_band_width'] = int(math.ceil(float(
-                tmp_max_band_width.strip()) / constants.BYTE_TO_MB))
+        # total_bytes_sec and total_iops_sec must be integer
+        tmp_max_band_width = str(qos_specs.get('total_bytes_sec')).strip()
+        tmp_max_iops = str(qos_specs.get('total_iops_sec')).strip()
+        if not (tmp_max_band_width.isdigit() and tmp_max_iops.isdigit()):
+            err_msg = "total_bytes_sec and total_iops_sec must be integer, " \
+                      "the qos_specs is {0}".format(qos_specs)
+            LOG.error(err_msg)
+            raise exception.InvalidShare(reason=err_msg)
 
-        tmp_max_iops = str(qos_specs.get('total_iops_sec'))
-        if int(tmp_max_iops) == 0:
-            self.qos_config['max_iops'] = constants.MAX_IOPS
-        elif tmp_max_iops.strip().isdigit() \
-                and 0 <= int(tmp_max_iops.strip()) <= constants.MAX_IOPS_UPPER_LIMIT:
-            self.qos_config['max_iops'] = int(tmp_max_iops.strip())
+        self.qos_config['max_band_width'] = int(math.ceil(
+            driver_utils.capacity_unit_down_conversion(
+                float(tmp_max_band_width), constants.BASE_VALUE,
+                constants.POWER_BETWEEN_BYTE_AND_MB)
+        ))
+        self.qos_config['max_iops'] = int(tmp_max_iops)
 
     def _create_qos_when_update_qos(self, qos_name):
         try:

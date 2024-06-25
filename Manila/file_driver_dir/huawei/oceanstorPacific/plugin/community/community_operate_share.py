@@ -49,6 +49,40 @@ class CommunityOperateShare(OperateShare):
     def get_impl_type():
         return constants.PLUGIN_COMMUNITY_IMPL
 
+    @staticmethod
+    def _check_and_get_share_capacity(share_data):
+        if share_data.get("space_used") is None:
+            return {}
+
+        hard_limit = share_data.get("space_hard_quota")
+        used_space = share_data.get("space_used")
+
+        share_capacity = {
+            "hard_limit": str(hard_limit),
+            "used_space": str(used_space),
+            "avail_space": str(hard_limit - used_space)
+        }
+
+        if share_data.get('ssd_hard_quota') is None:
+            LOG.info("Share has no ssd quota, don't need return.")
+            return share_capacity
+
+        # get share tier capacity
+        ssd_hard_limit = share_data.get("ssd_hard_quota")
+        ssd_used_space = share_data.get("ssd_space_used")
+        hdd_hard_limit = share_data.get("hdd_hard_quota")
+        hdd_used_space = share_data.get("hdd_space_used")
+        share_capacity.update({
+            'ssd_hard_limit': str(ssd_hard_limit),
+            'ssd_used_space': str(ssd_used_space),
+            'ssd_avail_space': str(ssd_hard_limit - ssd_used_space),
+            'hdd_hard_limit': str(hdd_hard_limit),
+            'hdd_used_space': str(hdd_used_space),
+            'hdd_avail_space': str(hdd_hard_limit - hdd_used_space)
+        })
+
+        return share_capacity
+
     def create_share(self):
         self._check_domain()
         self._get_qos_config()

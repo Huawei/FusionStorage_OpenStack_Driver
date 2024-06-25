@@ -160,6 +160,19 @@ class SuyanGFSOperateShare(CommunityOperateShare):
         LOG.info("{0} share done. New size:{1}.".format(action, new_size))
         return True
 
+    def get_share_usage(self, share_usages):
+        """获取单个GFS和Dtree对应ssd容量信息+hdd信息+总容量信息"""
+        if not self.share_parent_id:
+            share_name = 'share-' + self.share.get('share_id')
+        else:
+            share_name = 'share-' + self.share_parent_id
+
+        share_info = share_usages.get(share_name)
+        if not share_info:
+            return {}
+
+        return self._check_and_get_share_capacity(share_info)
+
     def _check_space_for_gfs(self, name_locator, new_hard_size, new_hot_size):
         gfs_detail = self.client.query_gfs_detail(name_locator)
         org_hard_size_in_gb = self._get_quota_in_gb(gfs_detail)

@@ -8,7 +8,8 @@ __all__ = [
     "SuyanSingleShareTier",
     "SuyanGFSCheckUpdateStorage",
     "SuyanGFSOperateShare",
-    "SuyanGfsChangeAccess"
+    "SuyanGfsChangeAccess",
+    "SuyanGfsShareTier"
 ]
 from .community.community_change_access import CommunityChangeAccess
 from .community.community_check_update_storage import CommunityCheckUpdateStorage
@@ -20,3 +21,4 @@ from .suyan_single.suyan_single_share_tier import SuyanSingleShareTier
 from .suyan_gfs.suyan_gfs_check_update_storage import SuyanGFSCheckUpdateStorage
 from .suyan_gfs.suyan_gfs_operate_share import SuyanGFSOperateShare
 from .suyan_gfs.suyan_gfs_change_access import SuyanGfsChangeAccess
+from .suyan_gfs.suyan_gfs_share_tier import SuyanGfsShareTier
