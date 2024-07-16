@@ -110,14 +110,14 @@ class HuaweiNasDriverForSuyan(HuaweiNasDriver, SuyanCustomizationApi):
         """苏研定制接口，修改文件系统分级策略"""
         LOG.info("********************Do modify_share_tier_policy.********************")
 
-        self.plugin_factory.instance_service(ShareTier, share).modify_share_tier_policy(
-            new_share)
+        self.plugin_factory.instance_service(
+            ShareTier, share, self.storage_features).modify_share_tier_policy(new_share)
 
     def initialize_share_tier(self, context, share, file_path, init_type):
         """苏研定制接口，创建共享预热/预冷任务"""
         LOG.info("********************Do initialize_share_tier.********************")
-        self.plugin_factory.instance_service(ShareTier, share).initialize_share_tier(
-            file_path, init_type)
+        return self.plugin_factory.instance_service(
+            ShareTier, share, self.storage_features).initialize_share_tier(file_path, init_type)
 
     def get_share_tier_status(self, context, share):
         """苏研定制接口，查询预热/预冷任务状态"""
@@ -128,7 +128,8 @@ class HuaweiNasDriverForSuyan(HuaweiNasDriver, SuyanCustomizationApi):
     def terminate_share_tier(self, context, share):
         """苏研定制接口，删除预热/预冷任务"""
         LOG.info("********************Do terminate_share_tier.********************")
-        self.plugin_factory.instance_service(ShareTier, share).terminate_share_tier()
+        self.plugin_factory.instance_service(
+            ShareTier, share, self.storage_features).terminate_share_tier()
 
     def _parse_cmcc_qos_options(self, share):
         """苏研定制接口，返回share绑定的qos信息"""

@@ -142,7 +142,12 @@ class CommunityOperateShare(OperateShare):
         pass
 
     def parse_cmcc_qos_options(self):
-        pass
+        """解冻前需要先获取要恢复的qos信息"""
+        share_qos_info = {
+            "total_bytes_sec": 0,
+            "total_iops_sec": 0
+        }
+        return share_qos_info
 
     def _check_domain(self):
         """当共享协议类型存在Nfs或Cifs时，检查配置文件集群域名是否存在"""
@@ -232,7 +237,8 @@ class CommunityOperateShare(OperateShare):
             'name': self.namespace_name,
             'forbidden_dpc': self._get_forbidden_dpc_param(),
             'storage_pool_id': self.storage_pool_id,
-            'account_id': self.account_id
+            'account_id': self.account_id,
+            'atime_update_mode': constants.ATIME_UPDATE_HOURS
         }
         self.tier_info = self._get_all_share_tier_policy()
         hot_data_size = self.tier_info.get('hot_data_size')
@@ -583,3 +589,30 @@ class CommunityOperateShare(OperateShare):
             return share_path
         final_path_param_list = ['-o', nfs_mount_options, share_path]
         return ' '.join(final_path_param_list)
+
+    def _get_update_qos_config(self, qos_specs):
+        # total_bytes_sec and total_iops_sec must be exist
+        if qos_specs.get('total_bytes_sec') is None or \
+                qos_specs.get('total_iops_sec') is None:
+            err_msg = "Can not get qos config when update_qos," \
+                      "total_bytes_sec and total_iops_sec must need to be " \
+                      "set when update qos" \
+                      " the qos_specs is {0}".format(qos_specs)
+            LOG.error(err_msg)
+            raise exception.InvalidShare(reason=err_msg)
+
+        # total_bytes_sec and total_iops_sec must be integer
+        tmp_max_band_width = str(qos_specs.get('total_bytes_sec')).strip()
+        tmp_max_iops = str(qos_specs.get('total_iops_sec')).strip()
+        if not (tmp_max_band_width.isdigit() and tmp_max_iops.isdigit()):
+            err_msg = "total_bytes_sec and total_iops_sec must be integer, " \
+                      "the qos_specs is {0}".format(qos_specs)
+            LOG.error(err_msg)
+            raise exception.InvalidShare(reason=err_msg)
+
+        self.qos_config['max_band_width'] = int(math.ceil(
+            driver_utils.capacity_unit_down_conversion(
+                float(tmp_max_band_width), constants.BASE_VALUE,
+                constants.POWER_BETWEEN_BYTE_AND_MB)
+        ))
+        self.qos_config['max_iops'] = int(tmp_max_iops)

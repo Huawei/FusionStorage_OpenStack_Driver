@@ -67,25 +67,17 @@ class HuaweiNasDriver(driver.ShareDriver):
         """Check for setup error."""
 
         LOG.info("********************Check conf file and plugin.********************")
-        self.plugin_factory.instance_service(CheckUpdateStorage, None).check_service()
+        try:
+            self.plugin_factory.instance_service(CheckUpdateStorage, None).check_service()
+        except Exception as err:
+            self.plugin_factory.disconnect_client()
+            raise err
 
     def do_setup(self, context):
         """Initialize the huawei nas driver while starting."""
 
         LOG.info("********************Do setup the driver.********************")
-        self.plugin_factory.reset_client()
-        self.cluster_sn = self.plugin_factory.get_esn()
-        self.get_share_stats(True)
-
-    def get_share_stats(self, refresh=False):
-        """Get share status.
-        If 'refresh' is True, run update the stats first.
-        """
-
-        LOG.debug("********************Update share stats.********************")
-        if refresh:
-            self._update_share_stats()
-        return self._stats
+        self.cluster_sn = self.plugin_factory.reset_client()
 
     def get_configured_ip_versions(self):
         return self.get_configured_ip_version()
@@ -156,6 +148,7 @@ class HuaweiNasDriver(driver.ShareDriver):
     def _update_share_stats(self):
         """Retrieve status info from share group."""
 
+        LOG.info("********************Update share stats.********************")
         backend_name = self.configuration.safe_get('share_backend_name')
         data = dict(
             share_backend_name=backend_name or 'OceanStorPacific_NFS_CIFS',
@@ -168,7 +161,12 @@ class HuaweiNasDriver(driver.ShareDriver):
             total_capacity_gb=0.0,
             free_capacity_gb=0.0,
             ipv6_support=True)
-        self.plugin_factory.instance_service(CheckUpdateStorage, None).update_storage_pool(data)
+        try:
+            self.plugin_factory.instance_service(
+                CheckUpdateStorage, None).update_storage_pool(data)
+        except Exception as err:
+            self.plugin_factory.disconnect_client()
+            raise err
         self._set_storage_features(data)
         super(HuaweiNasDriver, self)._update_share_stats(data)
 

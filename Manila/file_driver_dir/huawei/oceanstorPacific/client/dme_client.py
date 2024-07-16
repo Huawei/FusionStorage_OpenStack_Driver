@@ -66,9 +66,12 @@ class DMEClient(RestClient):
         status_code = res.status_code
 
         if status_code in constants.DME_HTTP_SUCCESS_CODE:
-            return status_code, constants.DME_REST_NORMAL
-        result = res.json()
-        return status_code, result.get('error_code', constants.DME_REST_NORMAL)
+            error_code = constants.DME_REST_NORMAL
+        else:
+            result = res.json()
+            error_code = result.get('error_code', status_code)
+        LOG.debug("Response http code is %s, error_code is %s", status_code, error_code)
+        return status_code, error_code
 
     @staticmethod
     def _assert_result(result, msg_format, special_error_code_param=None):
@@ -147,6 +150,7 @@ class DMEClient(RestClient):
 
         self._login_url = self.login_url
         LOG.info("Login the DME Storage success, login_url is %s" % self.login_url)
+        return result
 
     def logout(self):
         if not self._login_url:
@@ -171,17 +175,14 @@ class DMEClient(RestClient):
                 self._session.headers.get('X-Auth-Token') != old_token):
             LOG.info('Relogin has been done by other thread, '
                      'no need relogin again.')
-            return
+            return {}
 
         self.logout()
-        self.login()
+        return self.login()
 
     def query_cluster_statistics_by_name(self, cluster_name):
-        url = '/rest/storagemgmt/v1/cluster-classifications/statistics'
-        query_param = {
-            'name': cluster_name
-        }
-        result = self.call(url, data=query_param, method='GET')
+        url = '/rest/storagemgmt/v1/cluster-classifications/statistics?name=%s' % cluster_name
+        result = self.call(url, method='GET')
         self._assert_result(result, "query cluster classifications failed,")
         return result
 
@@ -209,45 +210,21 @@ class DMEClient(RestClient):
         self._assert_result(result, "delete the ip addresses of the dpc to the gfs failed,")
         return result
 
-    def change_gfs_size(self, name_locator, new_size_in_gb, new_hot_size):
+    def change_gfs_size(self, modify_param):
         url = '/rest/fileservice/v1/gfs'
-        new_size_in_kb = driver_utils.convert_capacity(new_size_in_gb, constants.CAP_GB, constants.CAP_KB)
-        data = {
-            "name_locator": name_locator,
-            "quota": {
-                "directory_quota": {
-                    "space_quota": {
-                        "hard_quota": new_size_in_kb,
-                        "unit_type": constants.CAP_KB
-                    }
-                }
-            }
-        }
-        if new_hot_size:
-            new_hot_size_in_kb = driver_utils.convert_capacity(new_hot_size, constants.CAP_GB, constants.CAP_KB)
-            data["disk_pool_limit"] = {
-                "tier_hot_limit": new_hot_size_in_kb,
-                "tier_cold_limit": new_size_in_kb - new_hot_size_in_kb,
-                "unit_type": constants.CAP_KB
-            }
-        result = self.call(url, data=data, method='PUT')
+        result = self.call(url, data=modify_param, method='PUT')
         self._assert_result(result, "Change GFS size failed,")
         return result
 
-    def change_gfs_dtree_size(self, name_locator, new_size_in_gb):
+    def change_gfs_quota_size(self, modify_param):
+        url = '/rest/fileservice/v1/gfs/quotas'
+        result = self.call(url, data=modify_param, method='PUT')
+        self._assert_result(result, "Change GFS quota size failed,")
+        return result
+
+    def change_gfs_dtree_size(self, modify_param):
         url = '/rest/fileservice/v1/gfs/dtrees/quotas'
-        data = {
-            "name_locator": name_locator,
-            "quota": {
-                "directory_quota": {
-                    "space_quota": {
-                        "hard_quota": new_size_in_gb,
-                        "unit_type": constants.CAP_GB
-                    }
-                }
-            }
-        }
-        result = self.call(url, data=data, method='PUT')
+        result = self.call(url, data=modify_param, method='PUT')
         self._assert_result(result, "Change GFS dtree size failed,")
         return result
 
@@ -345,28 +322,83 @@ class DMEClient(RestClient):
         self._assert_result(result, 'Query GFS info failed,')
         return result.get('data', [])
 
-    def get_tier_migration_policies_by_name_locator(self, name_locator):
+    def get_gfs_tier_migration_policies(self, query_param):
         url = '/rest/fileservice/v1/gfs/tier-migration-policies/query'
-        param = {
-            'name_locator': name_locator
-        }
-        result = self.call(url, data=param, method='POST')
+        result = self.call(url, data=query_param, method='POST')
+        self._assert_result(result, 'Query GFS tier grade policies failed,')
+        return result.get('data', [])
+
+    def get_gfs_tier_grade_policies(self, query_param):
+        url = '/rest/fileservice/v1/gfs/tier-placement-policies/query'
+        result = self.call(url, data=query_param, method='POST')
         self._assert_result(result, 'Query GFS tier migration policies failed,')
         return result.get('data', [])
 
-    def create_tier_migration_policie(self, param):
+    def create_gfs_tier_migration_policy(self, create_param):
         url = '/rest/fileservice/v1/gfs/tier-migration-policies'
-        result = self.call(url, data=param, method='POST')
-        self._assert_result(result, 'Create GFS tier migration policies failed,')
+        result = self.call(url, data=create_param, method='POST')
+        self._assert_result(result, 'Create GFS tier migration policy failed,')
         return result
 
-    def delete_tier_migration_policie_by_name_locator(self, name_locator):
+    def create_gfs_tier_grade_policy(self, create_param):
+        url = '/rest/fileservice/v1/gfs/tier-placement-policies'
+        result = self.call(url, data=create_param, method='POST')
+        self._assert_result(result, 'Create GFS tier grade policy failed,')
+        return result
+
+    def delete_gfs_tier_migration_policy(self, delete_param):
         url = '/rest/fileservice/v1/gfs/tier-migration-policies/delete'
-        param = {
-            'name_locator': name_locator
+        result = self.call(url, data=delete_param, method='POST')
+        not_found_error_param = {
+            'special_code': constants.GFS_TIER_POLICY_NOT_EXIST,
+            'error_msg': 'Delete gfs tier migrate policy failed '
+                         'because of object not exist',
+            'error_type': exception.ShareNotFound
         }
+        self._assert_result(result, 'Delete GFS tier migration policy failed,',
+                            special_error_code_param=not_found_error_param)
+        return result
+
+    def delete_gfs_tier_grade_policy(self, delete_param):
+        url = '/rest/fileservice/v1/gfs/tier-placement-policies/delete'
+        result = self.call(url, data=delete_param, method='POST')
+        not_found_error_param = {
+            'special_code': constants.GFS_TIER_POLICY_NOT_EXIST,
+            'error_msg': 'Delete gfs tier grade policy failed because of object not exist',
+            'error_type': exception.ShareNotFound
+        }
+        self._assert_result(result, 'Delete GFS tier grade policy failed,',
+                            special_error_code_param=not_found_error_param)
+        return result
+
+    def modify_gfs_tier_grade_policy(self, modify_param):
+        url = '/rest/fileservice/v1/gfs/tier-placement-policies'
+        result = self.call(url, data=modify_param, method='PUT')
+        self._assert_result(result, 'Modify GFS tier grade policy failed,')
+        return result
+
+    def modify_gfs_tier_migrate_policy(self, modify_param):
+        url = '/rest/fileservice/v1/gfs/tier-migration-policies'
+        result = self.call(url, data=modify_param, method='PUT')
+        self._assert_result(result, 'Modify GFS tier migrate policy failed,')
+        return result
+
+    def create_gfs_qos_policy(self, qos_param):
+        url = '/rest/fileservice/v1/gfs/qos'
+        result = self.call(url, data=qos_param, method='POST')
+        self._assert_result(result, 'Create GFS qos policy failed, ')
+        return result
+
+    def query_gfs_qos_policy(self, param):
+        url = '/rest/fileservice/v1/gfs/qos/query'
         result = self.call(url, data=param, method='POST')
-        self._assert_result(result, 'Delete GFS tier migration policies failed,')
+        self._assert_result(result, 'Get gfs qos from gfs name failed,')
+        return result.get('data', [])
+
+    def update_gfs_qos_policy(self, param):
+        url = '/rest/fileservice/v1/gfs/qos'
+        result = self.call(url, data=param, method='PUT')
+        self._assert_result(result, 'Update gfs qos from gfs name failed,')
         return result
 
     def get_all_gfs_capacities_info(self, cluster_name):
@@ -378,7 +410,6 @@ class DMEClient(RestClient):
         totals = self.get_total_info_by_offset(
             self._get_gfs_dtree_capacities_info, cluster_name)
         return totals
-
 
     def _get_gfs_capacities_info(self, offset, cluster_name):
         gfs_query_param = {

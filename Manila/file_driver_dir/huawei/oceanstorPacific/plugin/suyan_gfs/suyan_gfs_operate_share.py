@@ -33,12 +33,30 @@ class SuyanGFSOperateShare(CommunityOperateShare):
         super(SuyanGFSOperateShare, self).__init__(
             client, share, driver_config, context, storage_features)
         self.share_parent_id = self._get_share_parent_id()
+        self.gfs_name_locator = None
         self.gfs_param = {}
         self.gfs_dtree_param = {}
 
     @staticmethod
     def get_impl_type():
         return constants.PLUGIN_SUYAN_GFS_IMPL
+
+    @staticmethod
+    def _set_quota_param(name_locator, new_size):
+        new_size_in_kb = driver_utils.convert_capacity(
+            new_size, constants.CAP_GB, constants.CAP_KB)
+        modify_param = {
+            'name_locator': name_locator,
+            'quota': {
+                'directory_quota': {
+                    'space_quota': {
+                        'hard_quota': new_size_in_kb,
+                        'unit_type': constants.CAP_KB
+                    }
+                }
+            }
+        }
+        return modify_param
 
     def create_share(self):
         if not self.share_parent_id:
@@ -74,6 +92,7 @@ class SuyanGFSOperateShare(CommunityOperateShare):
         """
         self._set_gfs_create_param()
         self._create_gfs()
+        self._create_gfs_smart_features()
         return self._get_gfs_location()
 
     def create_gfs_dtree(self):
@@ -140,22 +159,29 @@ class SuyanGFSOperateShare(CommunityOperateShare):
             raise exception.InvalidShare(reason=err_msg)
 
         cluster_name = self.storage_pool_name
+        task_id_key = 'task_id'
         if not self.share_parent_id:
             # gfs场景
             new_hot_size = self._get_all_share_tier_policy().get('hot_data_size')
             gfs_name = constants.SHARE_PREFIX + self.share.get('share_id')
             name_locator = '@'.join([cluster_name, gfs_name])
-            self._check_space_for_gfs(name_locator, new_size, new_hot_size)
-            result = self.client.change_gfs_size(name_locator, new_size, new_hot_size)
-            self.client.wait_task_until_complete(result.get('task_id'))
+            # 修改GFS分级容量
+            gfs_tier_cap_modify_result = self._check_and_update_gfs_tier_size(
+                name_locator, new_size, new_hot_size)
+            if gfs_tier_cap_modify_result:
+                self.client.wait_task_until_complete(gfs_tier_cap_modify_result.get(task_id_key))
+            # 修改GFS配额容量
+            gfs_quota_modify_result = self._update_gfs_quota_size(name_locator, new_size)
+            self.client.wait_task_until_complete(gfs_quota_modify_result.get(task_id_key))
         else:
             # dtree场景
             gfs_name = constants.SHARE_PREFIX + self.share_parent_id
             dtree_name = constants.SHARE_PREFIX + self.share.get('share_id')
             name_locator = '@'.join([cluster_name, gfs_name, dtree_name])
             self._check_space_for_dtree(name_locator, new_size)
-            result = self.client.change_gfs_dtree_size(name_locator, new_size)
-            self.client.wait_task_until_complete(result.get('task_id'))
+            modify_param = self._set_quota_param(name_locator, new_size)
+            result = self.client.change_gfs_dtree_size(modify_param)
+            self.client.wait_task_until_complete(result.get(task_id_key))
 
         LOG.info("{0} share done. New size:{1}.".format(action, new_size))
         return True
@@ -173,30 +199,91 @@ class SuyanGFSOperateShare(CommunityOperateShare):
 
         return self._check_and_get_share_capacity(share_info)
 
-    def _check_space_for_gfs(self, name_locator, new_hard_size, new_hot_size):
+    def update_qos(self, qos_specs):
+        """
+        根据传递的qos_specs，刷新share的qos信息，
+        如果没有则创建对应qos, 此接口的share不是share_instance对象是share对象
+        """
+        if not self.share.get('export_locations')[0]:
+            err_msg = _("update share qos fail for invalid export location.")
+            raise exception.InvalidShare(reason=err_msg)
+        self._get_update_qos_config(qos_specs)
+        self.namespace_name = constants.SHARE_PREFIX + self.share.get('id')
+        self._get_storage_pool_name()
+        qos_query_param = {
+            'gfs_names': [self.storage_pool_name + "@" + self.namespace_name]
+        }
+        update_and_create_qos_param = {
+            'gfs_name': self.storage_pool_name + "@" + self.namespace_name,
+            'name': self.namespace_name,
+            'max_ops': self.qos_config.get('max_iops'),
+            'max_mbps': self.qos_config.get('max_band_width')
+        }
+        qos_info = self.client.query_gfs_qos_policy(qos_query_param)
+        if qos_info:
+            result = self.client.update_gfs_qos_policy(update_and_create_qos_param)
+            try:
+                self.client.wait_task_until_complete(result.get('task_id'))
+            except Exception as err:
+                LOG.error("Update GFS qos task failed, reason is %s", err)
+                raise err
+        else:
+            result = self.client.create_gfs_qos_policy(update_and_create_qos_param)
+            try:
+                self.client.wait_task_until_complete(result.get('task_id'))
+            except Exception as err:
+                LOG.error("Create GFS qos task failed, reason is %s", err)
+                raise err
+
+    def _check_and_update_gfs_tier_size(self, name_locator, new_hard_size, new_hot_size):
         gfs_detail = self.client.query_gfs_detail(name_locator)
         org_hard_size_in_gb = self._get_quota_in_gb(gfs_detail)
 
-        # 冷、热、总都不能缩
-        if new_hot_size:
-            org_hot_size_in_gb = self._get_tier_limit(gfs_detail, 'tier_hot_limit')
-            org_cold_size_in_gb = self._get_tier_limit(gfs_detail, 'tier_cold_limit')
-
-            new_cold_size = new_hard_size - new_hot_size
-            if new_cold_size <= org_cold_size_in_gb:
-                err_msg = _("not allowed to shrinkage, new_cold_size: {0}, org_cold_size_in_gb: {1}")
-                LOG.info(err_msg)
-                raise exception.InvalidShare(reason=err_msg)
-
-            if new_hot_size <= org_hot_size_in_gb:
-                err_msg = _("not allowed to shrinkage, new_hot_size: {0}, org_hot_size_in_gb: {1}")
-                LOG.info(err_msg)
-                raise exception.InvalidShare(reason=err_msg)
-
         if new_hard_size <= org_hard_size_in_gb:
-            err_msg = _("not allowed to shrinkage, new_hard_size: {0}, org_hard_size_in_gb: {1}")
+            err_msg = ("not allowed to shrinkage, new_hard_size: %s, "
+                       "org_hard_size_in_gb: %s") % (new_hard_size, org_hard_size_in_gb)
             LOG.info(err_msg)
             raise exception.InvalidShare(reason=err_msg)
+
+        if new_hot_size is None:
+            return {}
+
+        # 冷、热、总都不能缩
+        new_hot_size = int(new_hot_size)
+        org_hot_size_in_gb = self._get_tier_limit(gfs_detail, 'tier_hot_limit')
+        org_cold_size_in_gb = self._get_tier_limit(gfs_detail, 'tier_cold_limit')
+
+        new_cold_size = new_hard_size - new_hot_size
+        if new_cold_size < org_cold_size_in_gb:
+            err_msg = ("not allowed to shrink size, new_cold_size: %s, "
+                       "org_cold_size_in_gb: %s") % (new_cold_size, org_cold_size_in_gb)
+            LOG.info(err_msg)
+            raise exception.InvalidShare(reason=err_msg)
+
+        if new_hot_size < org_hot_size_in_gb:
+            err_msg = ("not allowed to shrinkage, new_hot_size: %s, "
+                       "org_hot_size_in_gb: %s") % (new_hot_size, org_hot_size_in_gb)
+            LOG.info(err_msg)
+            raise exception.InvalidShare(reason=err_msg)
+
+        new_size_in_kb = driver_utils.convert_capacity(
+            new_hard_size, constants.CAP_GB, constants.CAP_KB)
+        new_hot_size_in_kb = driver_utils.convert_capacity(
+            new_hot_size, constants.CAP_GB, constants.CAP_KB)
+        modify_param = {
+            "name_locator": name_locator,
+            "disk_pool_limit": {
+                "tier_hot_limit": new_hot_size_in_kb,
+                "tier_cold_limit": new_size_in_kb - new_hot_size_in_kb,
+                "unit_type": constants.CAP_KB
+            }
+        }
+        result = self.client.change_gfs_size(modify_param)
+        return result
+
+    def _update_gfs_quota_size(self, name_locator, new_size):
+        modify_param = self._set_quota_param(name_locator, new_size)
+        return self.client.change_gfs_quota_size(modify_param)
 
     def _check_space_for_dtree(self, name_locator, new_hard_size_in_gb):
         dtree_detail = self.client.query_gfs_dtree_detail(name_locator)
@@ -232,6 +319,112 @@ class SuyanGFSOperateShare(CommunityOperateShare):
         except Exception as err:
             LOG.error("Create GFS task failed, reason is %s", err)
             raise err
+
+    def _create_gfs_smart_features(self):
+        """
+        In this interface, we will go to create gfs tier
+        policy and qos policy
+        we will Deliver tasks in a unified
+        manner and wait until all tasks are complete.
+        :return:
+        """
+        self.gfs_name_locator = '@'.join([self.storage_pool_name, self.namespace_name])
+        gfs_tier_grade_param, gfs_tier_migrate_param = self._check_and_get_tier_param()
+        qos_param = {
+            'gfs_name': self.gfs_name_locator,
+            'name': self.namespace_name,
+            'max_ops': constants.QOS_UNLIMITED,
+            'max_mbps': constants.QOS_UNLIMITED
+        }
+        gfs_delete_param = {
+            'name_locator': self.gfs_name_locator
+        }
+        # Deliver all tasks
+        try:
+            task_id_list = self._deliver_gfs_smart_features_task(
+                qos_param, gfs_tier_grade_param, gfs_tier_migrate_param
+            )
+        except Exception as err:
+            LOG.error("task create failed, do rollback, reason is %s", err)
+            self.client.delete_gfs(gfs_delete_param)
+            raise err
+
+        # Enable Concurrent Tasks and wait until all tasks complete
+        try:
+            self.concurrent_exec_waiting_tasks(task_id_list)
+        except Exception as err:
+            LOG.error("task execute failed, do rollback, reason is %s", err)
+            self.client.delete_gfs(gfs_delete_param)
+            raise err
+
+    def _get_tier_grade_param(self, tier_grade_param):
+        """
+        set tier grade create param of gfs
+        :param tier_grade_param: empty dict to be update
+        :return: final tier grade create dict param
+        """
+        tier_grade = self.tier_info.get('tier_place')
+        if not tier_grade:
+            LOG.info("Tier place policy didn't configure, Don't need create")
+            return tier_grade_param
+
+        tier_grade_param.update({
+            'gfs_name_locator': self.gfs_name_locator,
+            'name': self.namespace_name + constants.GRADE_NAME,
+            'tier_grade': tier_grade
+        })
+        return tier_grade_param
+
+    def _get_tier_migrate_param(self, tier_migrate_param, current_tier_types):
+        """
+        get tier migrate create param
+        :param tier_migrate_param: empty dict
+        :param current_tier_types: storage tier type list
+        :return: final tier param dict
+        """
+        tier_migrate_expiration = self.tier_info.get('tier_migrate_expiration')
+        if not tier_migrate_expiration:
+            LOG.info("Tier tier migrate expiration didn't configure, Don't need create")
+            return tier_migrate_param
+
+        tier_migrate_param.update({
+            'gfs_name_locator': self.gfs_name_locator,
+            'name': self.namespace_name + constants.PERIODICITY_NAME,
+            'migration_type': constants.DME_MIGRATE_PERIODIC,
+            'tier_grade': self.get_lowest_tier_grade(current_tier_types),
+            'atime_filter': {
+                'atime_operator': constants.DME_ATIME_RATHER_THAN,
+                'atime': int(tier_migrate_expiration),
+                'atime_unit': constants.HTIME_UNIT
+            }
+        })
+        return tier_migrate_param
+
+    def _deliver_gfs_smart_features_task(
+            self, qos_param, gfs_tier_grade_param, gfs_tier_migrate_param):
+        """
+        deliver all tasks and return task_id_list
+        :param qos_param: the param of create qos
+        :param gfs_tier_grade_param: the param of create tier grade
+        :param gfs_tier_migrate_param: the param of create tier migrate
+        :return: all create task id list
+        """
+        task_id_list = []
+        task_id_key = 'task_id'
+        LOG.info("Begin to create gfs qos policy")
+        qos_task_result = self.client.create_gfs_qos_policy(qos_param)
+        task_id_list.append(qos_task_result.get(task_id_key))
+        if gfs_tier_grade_param:
+            LOG.info("Begin to create gfs tier grade policy")
+            tier_grade_result = self.client.create_gfs_tier_grade_policy(
+                gfs_tier_grade_param)
+            task_id_list.append(tier_grade_result.get(task_id_key))
+        if gfs_tier_migrate_param:
+            LOG.info("Begin to create gfs tier migreate policy")
+            tier_migrate_task_result = self.client.create_gfs_tier_migration_policy(
+                gfs_tier_migrate_param)
+            task_id_list.append(tier_migrate_task_result.get(task_id_key))
+        return task_id_list
 
     def _create_gfs_dtree(self):
         result = self.client.create_gfs_dtree(self.gfs_dtree_param)

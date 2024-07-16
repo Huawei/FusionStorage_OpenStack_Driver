@@ -51,8 +51,7 @@ ERROR_SPECIAL_STATUS = (
     50400004,
     1077949021,  # upgrading
     33623351,  # object name is not exist
-    33564736,  # file system id is not exist
-    33564718  # specified path is not exist
+    33564736  # file system id is not exist
 )
 
 POOL_STATUS_OK = (
@@ -79,6 +78,7 @@ REPLICA_PAIR_NOT_EXIST = 37120003
 NFS_SHARE_CLIENT_NOT_EXIST = 1077939728
 DTREE_NOT_EXIST = 33564767
 TIER_POLICY_NOT_EXIST = 33564719
+PATH_NOT_EXIST = 33564718
 
 # error code of ALREADY EXIST
 NAMESPACE_ALREADY_EXIST = 33656844
@@ -93,6 +93,7 @@ CIFS_SHARE_CLIENT_EXIST = 1077939718
 # namespace config
 NOT_FORBIDDEN_DPC = 0
 FORBIDDEN_DPC = 1
+MULTI_PROTO_SEPARATOR = '_'
 
 #
 BASE_VALUE = 1024
@@ -127,6 +128,7 @@ MAX_IOPS_UPPER_LIMIT = 1073741824000
 QOS_UNLIMITED = 0
 
 # Tier policy config
+PATH_SEPARATOR = '/'
 TIER_GRADE_HOT = '0'
 TIER_GRADE_WARM = '1'
 TIER_GRADE_COLD = '2'
@@ -146,16 +148,39 @@ ATIME_UPDATE_HOURS = 3600
 GRADE_NAME = '_manila_place'
 PERIODICITY_NAME = '_manila_periodicity'
 ONCE_MIGRATE_NAME = '_manila_once'
+SHARE_PREFIX = "share-"
 SORTED_DISK_POOL_TIER_LEVEL = ['4', '0', '1']
 DISK_TYPE_SSD = 'ssd'
 DISK_TYPE_SAS = 'sas'
 DISK_TYPE_SATA = 'sata'
 SUPPORT_DISK_TYPES = (DISK_TYPE_SSD, DISK_TYPE_SAS, DISK_TYPE_SATA)
+SSD_TOTAL_CAP_KEY = 'ssd_total_capacity_converged'
+SAS_TOTAL_CAP_KEY = 'sas_total_capacity_converged'
+SATA_TOTAL_CAP_KEY = 'sata_total_capacity_converged'
+SSD_USED_CAP_KEY = 'ssd_used_capacity_converged'
+SAS_USED_CAP_KEY = 'sas_used_capacity_converged'
+SATA_USED_CAP_KEY = 'sata_used_capacity_converged'
+TOTAL_CAPACITY_ENUM = {
+    DISK_TYPE_SSD: SSD_TOTAL_CAP_KEY,
+    DISK_TYPE_SAS: SAS_TOTAL_CAP_KEY,
+    DISK_TYPE_SATA: SATA_TOTAL_CAP_KEY
+}
+USED_CAPACITY_ENUM = {
+    DISK_TYPE_SSD: SSD_USED_CAP_KEY,
+    DISK_TYPE_SAS: SAS_USED_CAP_KEY,
+    DISK_TYPE_SATA: SATA_USED_CAP_KEY
+}
 DISK_POOL_TIER_ENUM = {
     '0': 'warm',
     '1': 'hot',
     '4': 'cold'
 }
+TIRE_TASK_PREHEAT = 'Preheat'
+TIRE_TASK_PRECOOL = 'Precool'
+TIER_MIGRATE_STRATEGY_HOT = 0
+TIER_MIGRATE_STRATEGY_COLD = 2
+TIER_MIGRATE_DEFAULT_ATIME = 100
+TIER_DAY_TO_HOUR = 24
 
 TIER_ENUM = {
     '0': 'hot',
@@ -190,6 +215,12 @@ STORAGE_RESERVED_PERCENTAGE = "Storage/Reserved_percentage"
 STORAGE_MAX_OVER_SUBSCRIPTION_RATIO = "Storage/Max_over_subscription_ratio"
 FILESYSTEM_STORAGE_POOL = "Filesystem/StoragePool"
 
+CAP_KB = "KB"
+CAP_MB = "MB"
+CAP_GB = "GB"
+CAP_TB = "TB"
+CAP_BYTE = "B"
+
 # DME constants
 # DME client config
 DME_SOCKET_TIMEOUT = 32
@@ -206,16 +237,18 @@ DME_GFS_MAX_PAGE_COUNT = 1000
 
 # DME OBJCET NOT EXIST ERROR CODE
 GFS_NOT_EXIST = ('fileservice.0040',)
+GFS_TIER_POLICY_NOT_EXIST = ('fileservice.0061',)
 OBJECT_NOT_EXIST = 'common.0005'
 GFS_DTREE_NOT_EXIST = (OBJECT_NOT_EXIST, )
 
 # DME OBJECT STATUS
 GFS_RUNNING_STATUS_NORMAL = 'normal'
 
-SHARE_PREFIX = "share-"
+# DME TIER KEY
+DME_MIGRATE_PERIODIC = 'periodic'
+DME_MIGRATE_ONCE = 'one_off'
+DME_ATIME_RATHER_THAN = 'greater_than'
 
-CAP_KB = "KB"
-CAP_MB = "MB"
-CAP_GB = "GB"
-CAP_TB = "TB"
-CAP_BYTE = "B"
+# DME TIER KEY
+DME_MIGRATE_PERIODIC = 'periodic'
+DME_ATIME_RATHER_THAN = 'greater_than'

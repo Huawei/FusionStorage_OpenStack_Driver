@@ -37,13 +37,11 @@ class PluginFactory(object):
         self.client = self._get_client()
 
     def reset_client(self):
-        self.client = self._get_client()
-        self.client.login()
+        return self.client.login().get('system_esn')
 
-    def get_esn(self):
-        if self.config.product == constants.PRODUCT_PACIFIC:
-            return self.client.get_esn()
-        return ''
+    def disconnect_client(self):
+        LOG.info("Begin to disconnect client")
+        self.client.logout()
 
     def instance_service(self, service_type, share,
                          storage_features=None, context=None):

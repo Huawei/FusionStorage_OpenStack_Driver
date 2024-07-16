@@ -69,7 +69,8 @@ class SuyanSingleCheckUpdateStorage(CommunityCheckUpdateStorage):
         pool_capabilities = super(SuyanSingleCheckUpdateStorage, self).get_pool_capabilities(
             pool_id, pool_info)
         # 上报硬盘池支持的分级属性
-        pool_capabilities.update(self._set_tier_capacity())
+        system_capacity = self.client.query_system_capacity()
+        pool_capabilities.update(self._set_tier_capacity(system_capacity, constants.POWER_BETWEEN_MB_AND_GB))
         # 上报存储热、温、冷容量
         pool_capabilities.update(self._set_support_tier_types(pool_id))
         return pool_capabilities

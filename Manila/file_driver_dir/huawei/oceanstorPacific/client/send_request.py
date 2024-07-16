@@ -72,7 +72,7 @@ class SendRequest:
 
             if not (url or ex_url):
                 try:
-                    self._login()
+                    result = self._login()
                     break
                 except Exception:
                     msg = (_("login fail, try again."))
@@ -86,6 +86,18 @@ class SendRequest:
                 continue
 
         return result
+
+    def logout(self):
+        if not self.headers.get('x-auth-token'):
+            return
+        try:
+            self._do_call('aa/sessions', None, 'DELETE')
+        except Exception as err:
+            LOG.warning("Logout failed because of %s", err)
+        finally:
+            self.headers.pop('x-auth-token')
+            self.cookie.clear()
+            self.cookie = None
 
     def _login(self):
         """Log in huawei oceanstorPacific array."""
@@ -111,6 +123,7 @@ class SendRequest:
 
         self.headers['x-auth-token'] = result.get('data', {}).get('x_auth_token')
         LOG.info("login success for url:{0}.\n".format(self.url))
+        return result
 
     def _do_call(self, url, data=None, method=None, ex_url=None, log_call=True):
 
