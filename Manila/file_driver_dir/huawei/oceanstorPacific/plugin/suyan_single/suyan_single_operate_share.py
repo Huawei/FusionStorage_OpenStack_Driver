@@ -90,14 +90,6 @@ class SuyanSingleOperateShare(CommunityOperateShare):
         else:
             self._update_qos(qos_name)
 
-    def parse_cmcc_qos_options(self):
-        """苏研定制接口，解冻前需要先获取要恢复的qos信息"""
-        share_qos_info = {
-            "total_bytes_sec": 0,
-            "total_iops_sec": 0
-        }
-        return share_qos_info
-
     def get_share_usage(self, share_usages):
         """苏研定制接口，通过share_usages获取对应share的容量信息"""
 
@@ -181,33 +173,6 @@ class SuyanSingleOperateShare(CommunityOperateShare):
 
         export_location = self.share.get('export_locations')[0].get('path')
         self._get_namespace_name_from_location(export_location)
-
-    def _get_update_qos_config(self, qos_specs):
-        # total_bytes_sec and total_iops_sec must be exist
-        if qos_specs.get('total_bytes_sec') is None or \
-                qos_specs.get('total_iops_sec') is None:
-            err_msg = "Can not get qos config when update_qos," \
-                      "total_bytes_sec and total_iops_sec must need to be " \
-                      "set when update qos" \
-                      " the qos_specs is {0}".format(qos_specs)
-            LOG.error(err_msg)
-            raise exception.InvalidShare(reason=err_msg)
-
-        # total_bytes_sec and total_iops_sec must be integer
-        tmp_max_band_width = str(qos_specs.get('total_bytes_sec')).strip()
-        tmp_max_iops = str(qos_specs.get('total_iops_sec')).strip()
-        if not (tmp_max_band_width.isdigit() and tmp_max_iops.isdigit()):
-            err_msg = "total_bytes_sec and total_iops_sec must be integer, " \
-                      "the qos_specs is {0}".format(qos_specs)
-            LOG.error(err_msg)
-            raise exception.InvalidShare(reason=err_msg)
-
-        self.qos_config['max_band_width'] = int(math.ceil(
-            driver_utils.capacity_unit_down_conversion(
-                float(tmp_max_band_width), constants.BASE_VALUE,
-                constants.POWER_BETWEEN_BYTE_AND_MB)
-        ))
-        self.qos_config['max_iops'] = int(tmp_max_iops)
 
     def _create_qos_when_update_qos(self, qos_name):
         try:

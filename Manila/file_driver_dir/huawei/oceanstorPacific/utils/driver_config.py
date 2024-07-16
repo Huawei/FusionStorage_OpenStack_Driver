@@ -142,11 +142,11 @@ class DriverConfig(object):
                 err_msg = _("Filesystem/StoragePool value must be int.")
                 LOG.error(err_msg)
                 raise exception.BadConfigurationException(reason=err_msg)
-            pool_list = [int(pool_id.strip()) for pool_id in text.split(';')]
-            setattr(self.config, 'pool_list', pool_list)
+            pool_list = set(int(pool_id.strip()) for pool_id in text.split(';'))
+            setattr(self.config, 'pool_list', list(pool_list))
         else:
-            pool_list = [pool.strip() for pool in text.split(';')]
-            setattr(self.config, 'pool_list', pool_list)
+            pool_list = set(pool.strip() for pool in text.split(';'))
+            setattr(self.config, 'pool_list', list(pool_list))
 
     def _reserved_percentage(self, xml_root):
         text = xml_root.findtext('Storage/Reserved_percentage')
@@ -209,7 +209,7 @@ class DriverConfig(object):
     def _hot_disk_type(self, xml_root):
         text = xml_root.findtext('Storage/HotDiskType')
         if not text or not text.strip():
-            setattr(self.config, 'hot_disk_type', constants.DISK_TYPE_SSD)
+            setattr(self.config, 'hot_disk_type', '')
         elif text.strip() not in constants.SUPPORT_DISK_TYPES:
             err_msg = _("Storage/HotDiskType configuration:%s "
                         "must in %s") % (text.strip(), constants.SUPPORT_DISK_TYPES)
@@ -220,7 +220,7 @@ class DriverConfig(object):
     def _warm_disk_type(self, xml_root):
         text = xml_root.findtext('Storage/WarmDiskType')
         if not text or not text.strip():
-            setattr(self.config, 'warm_disk_type', constants.DISK_TYPE_SAS)
+            setattr(self.config, 'warm_disk_type', '')
         elif text.strip() not in constants.SUPPORT_DISK_TYPES:
             err_msg = _("Storage/WarmDiskType configuration:%s "
                         "must in %s") % (text.strip(), constants.SUPPORT_DISK_TYPES)
@@ -231,7 +231,7 @@ class DriverConfig(object):
     def _cold_disk_type(self, xml_root):
         text = xml_root.findtext('Storage/ColdDiskType')
         if not text or not text.strip():
-            setattr(self.config, 'cold_disk_type', constants.DISK_TYPE_SATA)
+            setattr(self.config, 'cold_disk_type', '')
         elif text.strip() not in constants.SUPPORT_DISK_TYPES:
             err_msg = _("Storage/ColdDiskType configuration:%s "
                         "must in %s") % (text.strip(), constants.SUPPORT_DISK_TYPES)

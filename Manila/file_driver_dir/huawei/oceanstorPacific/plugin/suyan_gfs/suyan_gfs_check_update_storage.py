@@ -19,13 +19,13 @@ from oslo_log import log
 from manila import exception
 from manila.i18n import _
 
-from ..check_update_storage import CheckUpdateStorage
+from ..community.community_check_update_storage import CommunityCheckUpdateStorage
 from ...utils import constants, driver_utils
 
 LOG = log.getLogger(__name__)
 
 
-class SuyanGFSCheckUpdateStorage(CheckUpdateStorage):
+class SuyanGFSCheckUpdateStorage(CommunityCheckUpdateStorage):
     def __init__(self, client, share=None, driver_config=None,
                  context=None, storage_features=None):
         super(SuyanGFSCheckUpdateStorage, self).__init__(
@@ -55,8 +55,9 @@ class SuyanGFSCheckUpdateStorage(CheckUpdateStorage):
 
         for pool in self.driver_config.pool_list:
             pool_info = self.client.query_cluster_statistics_by_name(pool)
-            if pool_info:
-                pool_capabilities = self.get_pool_capabilities(pool_info)
+            pool_id = pool_info.get('id')
+            if pool_id:
+                pool_capabilities = self.get_pool_capabilities(pool_id, pool_info)
                 data[pool_key].append(pool_capabilities)
 
         if data[pool_key]:
@@ -66,7 +67,7 @@ class SuyanGFSCheckUpdateStorage(CheckUpdateStorage):
             err_msg = (_("Update cluster pools{0} fail.".format(self.driver_config.pool_list)))
             raise exception.InvalidInput(reason=err_msg)
 
-    def get_pool_capabilities(self, pool_info):
+    def get_pool_capabilities(self, pool_id, pool_info):
         """
         get cluster capacity and capabilities
         :param pool_info: cluster statistics info
@@ -81,7 +82,7 @@ class SuyanGFSCheckUpdateStorage(CheckUpdateStorage):
         # report capacity
         pool_capabilities = dict(
                     pool_name=pool_info.get('name'),
-                    pool_id=pool_info.get('id'),
+                    pool_id=pool_id,
                     qos=True,
                     free_capacity_gb=free,
                     total_capacity_gb=total,
@@ -92,10 +93,12 @@ class SuyanGFSCheckUpdateStorage(CheckUpdateStorage):
                 )
         # report gfs capabilities and tier types
         pool_capabilities.update({
-            'support_tier_types': list(set(pool_info.get('supported_tier_types'))),
+            'support_tier_types': list(set(pool_info.get('supported_tiers'))),
             'is_support_gfs': True,
             'cluster_pool_num': pool_info.get('storage_num')
         })
+        # 上报存储热、温、冷容量
+        pool_capabilities.update(self._set_tier_capacity(pool_info, constants.POWER_BETWEEN_BYTE_AND_GB))
 
         return pool_capabilities
 

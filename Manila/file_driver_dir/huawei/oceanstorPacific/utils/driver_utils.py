@@ -15,6 +15,7 @@
 #    under the License.
 
 import random
+import threading
 import time
 
 from oslo_log import log
@@ -117,3 +118,22 @@ def convert_capacity(cap, org_unit, tgt_unit):
         return cap * (1024 ** -offset)
     else:
         return cap
+
+
+class MyThread(threading.Thread):
+    def __init__(self, func, *args):
+        super(MyThread, self).__init__()
+        self.func = func
+        self.args = args
+        self.result_value = None
+
+    def run(self):
+        try:
+            self.result_value = self.func(*self.args)
+        except Exception as err:
+            LOG.error("running threading function failed, err is %s" % err)
+            self.result_value = {}
+
+    def get_result(self):
+        threading.Thread.join(self)
+        return self.result_value

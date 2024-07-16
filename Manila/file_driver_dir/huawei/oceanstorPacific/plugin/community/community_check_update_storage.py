@@ -53,17 +53,37 @@ class CommunityCheckUpdateStorage(CheckUpdateStorage):
         return storagepool_capacity
 
     def check_service(self):
+        """
+        In tiered scenarios, the hot, warm, and cold capacity of a storage pool
+        is reported based on the total system capacity.
+        Therefore, the number of storage pools must be limited to 1.
+        In tiered scenarios, do two checks
+        1. check the storage pool num of cluster is there only one
+        2. check the configuration of storagepool id is correct
+        not tiered scenarios, do one checks
+        1. check all the configured ids of storagepool is correct
+        """
+        all_pool_info = self.client.query_pool_info()
+
+        # check the number of storage pool
+        if self._is_tier_scenarios() and len(all_pool_info) != 1:
+            err_msg = ("Check service failed, There must be only one storage pool of "
+                       "cluster in tier scenarios.")
+            LOG.error(err_msg)
+            raise exception.InvalidHost(reason=err_msg)
+
+        storage_pool_id_list = [pool_info.get('storagePoolId') for pool_info in all_pool_info]
         for pool_id in self.driver_config.pool_list:
-            result = self.client.query_pool_info(pool_id)[0]
-            status_code = result['status']
+            if pool_id in storage_pool_id_list:
+                continue
 
-            if status_code in constants.POOL_STATUS_OK:
-                LOG.info(_("The storage pool(id:{0}) is healthy.".format(pool_id)))
-            else:
-                err_msg = _("The storage pool(id:{0}) is unhealthy.".format(pool_id))
-                raise exception.InvalidHost(reason=err_msg)
+            err_msg = (("Check service failed, the configured storagepool id %s not exist,"
+                       "the storagepool ids on storage is %s") %
+                       (pool_id, storage_pool_id_list))
+            LOG.error(err_msg)
+            raise exception.InvalidHost(reason=err_msg)
 
-        LOG.info(_('All the storage pools are healthy.'))
+        LOG.info('Check service success.')
 
     def update_storage_pool(self, data):
         """
@@ -73,20 +93,12 @@ class CommunityCheckUpdateStorage(CheckUpdateStorage):
         """
         pool_key = 'pools'
         data[pool_key] = []
-        all_pool_info = self.client.query_pool_info()
-
-        # check the number of storage pool
-        if len(all_pool_info) > 1 or len(all_pool_info) == 0:
-            err_msg = ("update storage pools failed, "
-                       "the storage pool num of cluster must be 1")
-            LOG.error(err_msg)
-            raise exception.InvalidInput(reason=err_msg)
-
-        pool_info = all_pool_info[0]
         for pool_id in self.driver_config.pool_list:
-            if pool_info.get('storagePoolId') == pool_id:
-                pool_capabilities = self.get_pool_capabilities(pool_id, pool_info)
-                data[pool_key].append(pool_capabilities)
+            pool_info = self.client.query_pool_info(pool_id)
+            if not pool_info:
+                continue
+            pool_capabilities = self.get_pool_capabilities(pool_id, pool_info[0])
+            data[pool_key].append(pool_capabilities)
 
         if data[pool_key]:
             LOG.debug(_("Updated storage pools:{0} success".format(self.driver_config.pool_list)))
@@ -104,11 +116,14 @@ class CommunityCheckUpdateStorage(CheckUpdateStorage):
         pool_capabilities = dict(
                     pool_name=pool_info.get('storagePoolName'),
                     qos=True,
-                    reserved_percentage=self.driver_config.reserved_percentage,
-                    max_over_subscription_ratio=self.driver_config.max_over_ratio,
+                    reserved_percentage=int(self.driver_config.reserved_percentage),
+                    max_over_subscription_ratio=int(self.driver_config.max_over_ratio),
                     ipv6_support=True,
                     share_proto='DPC',
-                    pool_id=pool_id
+                    pool_id=pool_id,
+                    dedupe=False,
+                    thin_provisioning=True,
+                    compression=True
                 )
         # 上报存储池容量信息
         pool_capabilities.update(self._set_storage_pool_capacity(pool_info))
@@ -117,50 +132,39 @@ class CommunityCheckUpdateStorage(CheckUpdateStorage):
     def get_all_share_usage(self):
         pass
 
-    def _set_tier_capacity(self):
+    def _set_tier_capacity(self, system_capacity, unit_power):
         """
         report system ssd,sata,sas total、free、used capacity
         :return:
         """
-        system_capacity = self.client.query_system_capacity()
-        total_capacity_enum = {
-            'ssd': 'ssd_total_capacity_converged',
-            'sas': 'sas_total_capacity_converged',
-            'sata': 'sata_total_capacity_converged',
-        }
-        used_capacity_enum = {
-            'ssd': 'ssd_used_capacity_converged',
-            'sas': 'sas_used_capacity_converged',
-            'sata': 'sata_used_capacity_converged',
-        }
-        hot_total_capacity = float(system_capacity.get(total_capacity_enum.get(
-            self.driver_config.hot_disk_type)))
-        warm_total_capacity = float(system_capacity.get(total_capacity_enum.get(
-            self.driver_config.warm_disk_type)))
-        cold_total_capacity = float(system_capacity.get(total_capacity_enum.get(
-            self.driver_config.cold_disk_type)))
-        hot_used_capacity = float(system_capacity.get(used_capacity_enum.get(
-            self.driver_config.hot_disk_type)))
-        warm_used_capacity = float(system_capacity.get(used_capacity_enum.get(
-            self.driver_config.warm_disk_type)))
-        cold_used_capacity = float(system_capacity.get(used_capacity_enum.get(
-            self.driver_config.cold_disk_type)))
+        hot_total_capacity = float(system_capacity.get(constants.TOTAL_CAPACITY_ENUM.get(
+            self.driver_config.hot_disk_type, constants.SSD_TOTAL_CAP_KEY), 0))
+        warm_total_capacity = float(system_capacity.get(constants.TOTAL_CAPACITY_ENUM.get(
+            self.driver_config.warm_disk_type, constants.SAS_TOTAL_CAP_KEY), 0))
+        cold_total_capacity = float(system_capacity.get(constants.TOTAL_CAPACITY_ENUM.get(
+            self.driver_config.cold_disk_type, constants.SATA_TOTAL_CAP_KEY), 0))
+        hot_used_capacity = float(system_capacity.get(constants.USED_CAPACITY_ENUM.get(
+            self.driver_config.hot_disk_type, constants.SSD_USED_CAP_KEY), 0))
+        warm_used_capacity = float(system_capacity.get(constants.USED_CAPACITY_ENUM.get(
+            self.driver_config.warm_disk_type, constants.SAS_USED_CAP_KEY), 0))
+        cold_used_capacity = float(system_capacity.get(constants.USED_CAPACITY_ENUM.get(
+            self.driver_config.cold_disk_type, constants.SATA_USED_CAP_KEY), 0))
         tier_capacity = {
             'hot_total_capacity_gb': round(driver_utils.capacity_unit_down_conversion(
-                hot_total_capacity, constants.BASE_VALUE, constants.POWER_BETWEEN_MB_AND_GB), 1),
+                hot_total_capacity, constants.BASE_VALUE, unit_power), 1),
             'hot_free_capacity_gb': round(driver_utils.capacity_unit_down_conversion(
                 hot_total_capacity - hot_used_capacity,
-                constants.BASE_VALUE, constants.POWER_BETWEEN_MB_AND_GB), 2),
+                constants.BASE_VALUE, unit_power), 2),
             'warm_total_capacity_gb': round(driver_utils.capacity_unit_down_conversion(
-                warm_total_capacity, constants.BASE_VALUE, constants.POWER_BETWEEN_MB_AND_GB), 1),
+                warm_total_capacity, constants.BASE_VALUE, unit_power), 1),
             'warm_free_capacity_gb': round(driver_utils.capacity_unit_down_conversion(
                 warm_total_capacity - warm_used_capacity,
-                constants.BASE_VALUE, constants.POWER_BETWEEN_MB_AND_GB), 2),
+                constants.BASE_VALUE, unit_power), 2),
             'cold_total_capacity_gb': round(driver_utils.capacity_unit_down_conversion(
-                cold_total_capacity, constants.BASE_VALUE, constants.POWER_BETWEEN_MB_AND_GB), 1),
+                cold_total_capacity, constants.BASE_VALUE, unit_power), 1),
             'cold_free_capacity_gb': round(driver_utils.capacity_unit_down_conversion(
                 cold_total_capacity - cold_used_capacity,
-                constants.BASE_VALUE, constants.POWER_BETWEEN_MB_AND_GB), 2)
+                constants.BASE_VALUE, unit_power), 2)
         }
         return tier_capacity
 

@@ -80,7 +80,11 @@ class PacificClient(object):
         return error_code
 
     def login(self):
-        self.call()
+        result = self.call()
+        return result.get('data', {})
+
+    def logout(self):
+        self.send_request.logout()
 
     def query_pool_info(self, pool_id=None):
         """This interface is used to query storage pools in a batch."""
@@ -432,11 +436,16 @@ class PacificClient(object):
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Create tier migrate policy success.(tier_name: {0})"
                        "".format(tier_migrate_param.get('name'))))
+            result['error_code'] = 0
+        elif result.get('result', {}).get('code') == constants.PATH_NOT_EXIST:
+            LOG.warning("Create tier migrate policy failed, the file_path:%s is not "
+                        "correct", tier_migrate_param.get("path_name"))
+            result['error_code'] = 1
         else:
             err_msg = _("Create tier migrate policy failed.(tier_name: {0})"
                         .format(tier_migrate_param.get('name')))
             raise exception.InvalidShare(reason=err_msg)
-        return result.get('data')
+        return result
 
     def create_nfs_share(self, namespace_name, account_id):
         """This interface is used to create an NFS share."""

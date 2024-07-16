@@ -23,7 +23,7 @@ from manila.share import api
 from manila.share import share_types
 from manila.share import utils as share_utils
 
-from ..utils import constants
+from ..utils import constants, driver_utils
 
 LOG = log.getLogger(__name__)
 
@@ -83,6 +83,17 @@ class BasePlugin(object):
         except Exception:
             return False
 
+    def concurrent_exec_waiting_tasks(self, task_id_list):
+        # Enable Concurrent Tasks and wait until all tasks complete
+        threading_task_list = []
+        for task_id in task_id_list:
+            threading_task = driver_utils.MyThread(
+                self.client.wait_task_until_complete, task_id)
+            threading_task.start()
+            threading_task_list.append(threading_task)
+        for task in threading_task_list:
+            task.get_result()
+
     def _get_share_metadata(self):
         try:
             share_id = self.share.get('share_id')
@@ -117,14 +128,15 @@ class BasePlugin(object):
 
         metadata_share_proto = self.share_metadata.get(share_proto_key, '')
         if metadata_share_proto:
-            return metadata_share_proto.split('&')
+            return metadata_share_proto.split(constants.MULTI_PROTO_SEPARATOR)
 
-        type_share_proto = self.share_type_extra_specs.get(share_proto_key, '').split('&')
+        type_share_proto = self.share_type_extra_specs.get(share_proto_key, '').split(
+            constants.MULTI_PROTO_SEPARATOR)
         if 'DPC' in type_share_proto:
             share_proto.append('DPC')
             return share_proto
 
-        return self.share.get(share_proto_key, '').split('&')
+        return self.share.get(share_proto_key, '').split(constants.MULTI_PROTO_SEPARATOR)
 
     def _get_share_parent_id(self):
         """
@@ -137,20 +149,16 @@ class BasePlugin(object):
             return self.share.get('parent_share_id')
         return metadata_parent_share_id
 
-    def _get_share_tier_policy(self, tier_info, tier_param, tier_grade=False):
+    def _get_share_tier_policy(self, tier_info, tier_param):
         """
         get tier policy
         Priority Level: metadata > share_instance
         :param tier_info: all tier info dict
         :param tier_param: tier policy key
-        :param tier_grade: if tier grade type
         :return:
         """
         metadata_tier_value = self.share_metadata.get(tier_param)
-        if tier_grade:
-            share_tier_value = self.share.get('tier_grade_policy', {}).get(tier_param)
-        else:
-            share_tier_value = self.share.get(tier_param)
+        share_tier_value = self.share.get('share_tier_strategy', {}).get(tier_param)
         tier_value = metadata_tier_value or share_tier_value
         if tier_value:
             tier_info[tier_param] = tier_value
@@ -162,11 +170,11 @@ class BasePlugin(object):
         """
         tier_info = {}
         # get hot data size
-        self._get_share_tier_policy(tier_info, 'hot_data_size', True)
+        self._get_share_tier_policy(tier_info, 'hot_data_size')
         # get tier_grade
-        self._get_share_tier_policy(tier_info, 'tier_place', True)
+        self._get_share_tier_policy(tier_info, 'tier_place')
         # get tier_migrate_expiration
-        self._get_share_tier_policy(tier_info, 'tier_migrate_expiration', False)
+        self._get_share_tier_policy(tier_info, 'tier_migrate_expiration')
         return tier_info
 
     def _get_share_access_proto(self):
@@ -200,3 +208,18 @@ class BasePlugin(object):
     def _get_storage_pool_name(self):
         self.storage_pool_name = share_utils.extract_host(
             self.share.get('host'), level='pool')
+
+    def _is_tier_scenarios(self):
+        """
+        Check is this backend a tier scenarios backend,
+        Tier scenarios: Customer configured two disk type enum
+        :return: Boolean
+        """
+        tier_scenarios_tuple = (
+            self.driver_config.hot_disk_type and self.driver_config.warm_disk_type,
+            self.driver_config.hot_disk_type and self.driver_config.cold_disk_type,
+            self.driver_config.cold_disk_type and self.driver_config.warm_disk_type,
+        )
+        if any(tier_scenarios_tuple):
+            return True
+        return False
