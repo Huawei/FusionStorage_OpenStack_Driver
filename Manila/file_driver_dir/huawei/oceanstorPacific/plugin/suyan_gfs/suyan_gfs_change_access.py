@@ -37,18 +37,26 @@ class SuyanGfsChangeAccess(CommunityChangeAccess):
         return constants.PLUGIN_SUYAN_GFS_IMPL
 
     def update_access(self, access_rules, add_rules, delete_rules):
+        if add_rules:
+            self._get_share_access_proto(add_rules, True)
+        if delete_rules:
+            self._get_share_access_proto(delete_rules, False)
+        if not add_rules and not delete_rules:
+            self._get_share_access_proto(access_rules, True)
         self._get_share_info()
-        self._update_access_for_share(access_rules, add_rules, delete_rules)
+        self._update_access_for_share(add_rules, delete_rules)
 
     def allow_access(self, access):
+        self._get_share_access_proto([access], True)
         self._get_share_info()
         self._classify_rules([access], 'allow')
 
     def deny_access(self, access):
+        self._get_share_access_proto([access], False)
         self._get_share_info()
         self._classify_rules([access], 'deny')
 
-    def _sync_access(self, access_rules):
+    def _sync_access(self):
         gfs_param = {
             'cluster_classification_name': self.storage_pool_name,
             'name': self.namespace_name,
@@ -56,8 +64,8 @@ class SuyanGfsChangeAccess(CommunityChangeAccess):
         }
         result = self.client.remove_ipaddress_from_gfs(gfs_param)
         self.client.wait_task_until_complete(result.get('task_id'))
-        if 'DPC' in self.access_proto:
-            self._classify_rules(access_rules, 'allow')
+        if 'DPC' in self.allow_access_proto:
+            self._classify_rules(self.allow_access_proto, 'allow')
 
     def _get_share_info(self):
         """
@@ -70,8 +78,6 @@ class SuyanGfsChangeAccess(CommunityChangeAccess):
             self.namespace_name = 'share-' + self.share.get('share_id')
         else:
             self.namespace_name = 'share-' + self.share_parent_id
-
-        self.access_proto = self._get_share_access_proto()
 
     def _deal_access_for_dpc(self, action):
         """

@@ -21,7 +21,7 @@ from manila.common import constants as common_constants
 from manila.i18n import _
 
 from ..change_access import ChangeAccess
-from ...utils import constants
+from ...utils import constants, driver_utils
 
 LOG = log.getLogger(__name__)
 
@@ -38,7 +38,8 @@ class CommunityChangeAccess(ChangeAccess):
         self.export_locations = None  # share路径信息
         self.nfs_share_id = None
         self.cifs_share_id = None
-        self.access_proto = None
+        self.allow_access_proto = {}
+        self.deny_access_proto = {}
         self.nfs_rules = []
         self.cifs_rules = []
         self.dpc_rules = []
@@ -49,16 +50,24 @@ class CommunityChangeAccess(ChangeAccess):
 
     def update_access(self, access_rules, add_rules, delete_rules):
         """Update access rules list."""
+        if add_rules:
+            self._get_share_access_proto(add_rules, True)
+        if delete_rules:
+            self._get_share_access_proto(delete_rules, False)
+        if not add_rules and not delete_rules:
+            self._get_share_access_proto(access_rules, True)
         self._get_account_and_namespace_information()
-        self._update_access_for_share(access_rules, add_rules, delete_rules)
+        self._update_access_for_share(add_rules, delete_rules)
 
     def allow_access(self, access):
+        self._get_share_access_proto([access], True)
         self._get_account_and_namespace_information()
-        self._classify_rules([access], 'allow')
+        self._classify_rules(self.allow_access_proto, 'allow')
 
     def deny_access(self, access):
+        self._get_share_access_proto([access], False)
         self._get_account_and_namespace_information()
-        self._classify_rules([access], 'deny')
+        self._classify_rules(self.deny_access_proto, 'deny')
 
     def _get_account_and_namespace_information(self):
         self._get_account_id()
@@ -66,18 +75,25 @@ class CommunityChangeAccess(ChangeAccess):
         self._get_share_related_info()
         self._query_and_set_share_info()
 
-    def _classify_rules(self, rules, action):
+    def _classify_rules(self, access_rules, action):
+        access_type_key = 'access_type'
+        self.nfs_rules = []
+        self.cifs_rules = []
+        self.dpc_rules = []
+        nfs_access_rules = access_rules.get('NFS', [])
+        cifs_access_rules = access_rules.get('CIFS', [])
+        dpc_access_rules = access_rules.get('DPC', [])
+        for nfs_access_rule in nfs_access_rules:
+            if nfs_access_rule.get(access_type_key) == 'ip':
+                self.nfs_rules.append(nfs_access_rule)
 
-        for access in rules:
-            access_type = access['access_type']
-            if 'NFS' in self.access_proto and access_type == 'ip':
-                self.nfs_rules.append(access)
+        for cifs_access_rule in cifs_access_rules:
+            if cifs_access_rule.get(access_type_key) == 'user':
+                self.cifs_rules.append(cifs_access_rule)
 
-            if 'CIFS' in self.access_proto and access_type == 'user':
-                self.cifs_rules.append(access)
-
-            if 'DPC' in self.access_proto and access_type == 'ip':
-                self.dpc_rules.append(access)
+        for dpc_access_rule in dpc_access_rules:
+            if dpc_access_rule.get(access_type_key) == 'ip':
+                self.dpc_rules.append(dpc_access_rule)
 
         if self.nfs_rules:
             self._deal_access_for_nfs(action)
@@ -172,41 +188,42 @@ class CommunityChangeAccess(ChangeAccess):
                 LOG.info("Will be remove dpc access.(nums: {0})".format(len(dpc_ips)))
                 self.client.deny_access_for_dpc(self.namespace_name, ','.join(dpc_ips))
 
-    def _sync_access(self, access_rules):
+    def _sync_access(self):
         """Sync all access rules of the share between storage and platform"""
         access_value_key = 'access_value'
-        client_id_key = 'access_value'
-        if 'NFS' in self.access_proto:
+        client_id_key = 'client_id'
+        if 'NFS' in self.allow_access_proto:
             result = self.client.query_nfs_share_clients_information(self.nfs_share_id, self.account_id)
             deny_rules, allow_rules, change_rules = self._get_need_update_access(
-                result, access_rules, 'access_name', access_value_key)
-            for deny_rule in deny_rules:
+                result, self.allow_access_proto.get('NFS', []), 'access_name',
+                access_value_key)
+            for _, deny_rule in deny_rules.items():
                 self.client.deny_access_for_nfs(deny_rule.get(client_id_key), self.account_id)
-            for allow_rule in allow_rules:
+            for _, allow_rule in allow_rules.items():
                 self.client.allow_access_for_nfs(
                     self.nfs_share_id, allow_rule.get('access_to'),
                     allow_rule.get('access_level'), self.account_id)
-            for change_rule in change_rules:
+            for _, change_rule in change_rules.items():
                 self.client.change_access_for_nfs(
                     change_rule.get(client_id_key),
                     change_rule.get(access_value_key), self.account_id)
-        if 'CIFS' in self.access_proto:
+        if 'CIFS' in self.allow_access_proto:
             result = self.client.query_cifs_share_user_information(self.cifs_share_id, self.account_id)
             deny_rules, allow_rules, change_rules = self._get_need_update_access(
-                result, access_rules, 'name', 'permission')
-            for deny_rule in deny_rules:
+                result, self.allow_access_proto.get('CIFS', []), 'name', 'permission')
+            for _, deny_rule in deny_rules.items():
                 self.client.deny_access_for_cifs(deny_rule.get(client_id_key), self.account_id)
-            for allow_rule in allow_rules:
+            for _, allow_rule in allow_rules.items():
                 self.client.allow_access_for_cifs(
                     self.cifs_share_id, allow_rule.get('access_to'),
                     allow_rule.get('access_level'), self.account_id)
-            for change_rule in change_rules:
+            for _, change_rule in change_rules.items():
                 self.client.change_access_for_cifs(
                     change_rule.get(client_id_key),
                     change_rule.get(access_value_key), self.account_id)
-        if 'DPC' in self.access_proto:
+        if 'DPC' in self.allow_access_proto:
             self.client.deny_access_for_dpc(self.namespace_name, '*')
-            self._classify_rules(access_rules, 'allow')
+            self._classify_rules(self.allow_access_proto, 'allow')
 
     def _get_need_update_access(self, storage_access_list, access_rules, access_param,
                                 permission_param):
@@ -236,7 +253,7 @@ class CommunityChangeAccess(ChangeAccess):
             elif access_info.get(access_level_key) != access_level:
                 need_change_access_info[access_to] = {
                     client_id_key: access_info.get(client_id_key),
-                    'access_value': rule.get(access_level_key),
+                    'access_value': access_level,
                 }
                 need_remove_access_info.pop(access_to)
             else:
@@ -264,8 +281,7 @@ class CommunityChangeAccess(ChangeAccess):
     def _query_and_set_share_info(self, dtree_id=0, dtree_name=None):
         """根据share_path信息查询对应的share信息"""
 
-        self.access_proto = self._get_share_access_proto()
-        if 'NFS' in self.access_proto:
+        if 'NFS' in (self.allow_access_proto or self.deny_access_proto):
             result = self.client.query_nfs_share_information(
                 self.account_id, self.namespace_id, dtree_id)
             for nfs_share in result:
@@ -276,7 +292,7 @@ class CommunityChangeAccess(ChangeAccess):
                 err_msg = _("Cannot get NFS share id(namespace_name:{0}).".format(self.namespace_name))
                 raise exception.InvalidShare(reason=err_msg)
 
-        if 'CIFS' in self.access_proto:
+        if 'CIFS' in (self.allow_access_proto or self.deny_access_proto):
             result = self.client.query_cifs_share_information(
                 self.account_id, dtree_name if dtree_name else self.namespace_name)
             for cifs_share in result:
@@ -287,12 +303,80 @@ class CommunityChangeAccess(ChangeAccess):
                 err_msg = _("Cannot get CIFS share id(namespace_name:{0}).".format(self.namespace_name))
                 raise exception.InvalidShare(reason=err_msg)
 
-    def _update_access_for_share(self, access_rules, add_rules, delete_rules):
+    def _update_access_for_share(self, add_rules, delete_rules):
         """根据传入的参数为共享添加或者移除权限"""
 
         if add_rules:
-            self._classify_rules(add_rules, 'allow')
+            self._classify_rules(self.allow_access_proto, 'allow')
         if delete_rules:
-            self._classify_rules(delete_rules, 'deny')
+            self._classify_rules(self.deny_access_proto, 'deny')
         if not (add_rules or delete_rules):
-            self._sync_access(access_rules)
+            self._sync_access()
+
+    def _get_share_access_proto(self, all_rules, is_allow):
+        """
+        1.Multi proto:Get access proto from metadata or access_rule
+        from key access_proto
+        Priority Level: metadata > access_rule
+        2.Single proto: Get access proto from share type or share instance
+        from key share_proto
+        Priority Level: share type > share_instance
+        :return:
+        """
+        all_access_proto = {}
+        metadata_access_proto = self.share_metadata.get('access_proto')
+        if not metadata_access_proto:
+            all_access_proto = self._get_access_proto_by_access_rules(all_rules)
+        elif metadata_access_proto not in self.share_proto:
+            error_msg = ("access proto %s is not exist in share proto %s" %
+                         (metadata_access_proto, self.share_proto))
+            LOG.error(error_msg)
+            raise exception.InvalidInput(error_msg)
+        else:
+            all_access_proto[metadata_access_proto] = all_rules
+
+        # 如果没有获取到一个权限列表，在同步权限的场景下，需要将存储上对应协议类型的已授权列表移除掉
+        if not all_access_proto:
+            for share_proto in self.share_proto:
+                all_access_proto[share_proto] = []
+
+        if is_allow:
+            self.allow_access_proto = all_access_proto
+        else:
+            self.deny_access_proto = all_access_proto
+
+    def _get_access_proto_by_access_rules(self, all_rules):
+        """
+        In the multi-protocol scenario, when the upper layer
+        specifies the protocol authorization or removes the authorization,
+        the NFS or DPC request may be delivered at the same time.
+        In this case, the driver needs to classify the authorization
+        requests by protocol type.
+        :param all_rules: Total Authorization List
+        :return: Authorization dict classified by protocol
+        """
+        all_access_proto = {}
+        if not all_rules:
+            return {}
+
+        for access_rule in all_rules:
+            access_proto = access_rule.get('access_proto')
+            # 如果上层未指定要授权的协议类型，则对当前share支持的所有协议类型进行授权
+            if not access_proto:
+                for share_proto in self.share_proto:
+                    driver_utils.add_or_update_dict_key(
+                        all_access_proto, share_proto, access_rule)
+            # 如果上层指定了要授权的协议类型，且指定的协议在当前share支持的协议白名单中，
+            # 则对指定的协议进行授权
+            elif access_proto in self.share_proto:
+                driver_utils.add_or_update_dict_key(
+                    all_access_proto, access_proto, access_rule)
+            # 如果上层指定了要授权的协议类型，且指定的协议不在当前share支持的协议白名单中，则报错
+            else:
+                error_msg = ("the access_proto of access rule %s is not exist in "
+                             "share proto %s, please check" %
+                             (access_rule, self.share_proto))
+                LOG.error(error_msg)
+                raise exception.InvalidInput(error_msg)
+
+        return all_access_proto
