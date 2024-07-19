@@ -120,6 +120,17 @@ def convert_capacity(cap, org_unit, tgt_unit):
         return cap
 
 
+def add_or_update_dict_key(tgt_dict, tgt_key, tgt_value):
+    """
+    when tgt dict not have tgt_key，and tgt_key and set tgt_value in a  new list
+    otherwise, append new_value in existed list
+    """
+    if tgt_key not in tgt_dict:
+        tgt_dict[tgt_key] = [tgt_value]
+    else:
+        tgt_dict.get(tgt_key).append(tgt_value)
+
+
 class MyThread(threading.Thread):
     def __init__(self, func, *args):
         super(MyThread, self).__init__()

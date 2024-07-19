@@ -43,8 +43,14 @@ class SuyanSingleChangeAccess(CommunityChangeAccess):
                 access_rules, add_rules, delete_rules)
             return
 
+        if add_rules:
+            self._get_share_access_proto(add_rules, True)
+        if delete_rules:
+            self._get_share_access_proto(delete_rules, False)
+        if not add_rules and not delete_rules:
+            self._get_share_access_proto(access_rules, True)
         self._get_account_and_share_related_information()
-        self._update_access_for_share(access_rules, add_rules, delete_rules)
+        self._update_access_for_share(add_rules, delete_rules)
         return
 
     def allow_access(self, access):
@@ -54,8 +60,9 @@ class SuyanSingleChangeAccess(CommunityChangeAccess):
             super(SuyanSingleChangeAccess, self).allow_access(access)
             return
 
+        self._get_share_access_proto([access], True)
         self._get_account_and_share_related_information()
-        self._classify_rules([access], 'allow')
+        self._classify_rules(self.allow_access_proto, 'allow')
         return
 
     def deny_access(self, access):
@@ -65,8 +72,9 @@ class SuyanSingleChangeAccess(CommunityChangeAccess):
             super(SuyanSingleChangeAccess, self).deny_access(access)
             return
 
+        self._get_share_access_proto([access], False)
         self._get_account_and_share_related_information()
-        self._classify_rules([access], 'deny')
+        self._classify_rules(self.deny_access_proto, 'deny')
         return
 
     def _get_account_and_share_related_information(self):

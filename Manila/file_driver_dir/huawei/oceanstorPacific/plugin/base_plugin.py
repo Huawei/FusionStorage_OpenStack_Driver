@@ -177,25 +177,6 @@ class BasePlugin(object):
         self._get_share_tier_policy(tier_info, 'tier_migrate_expiration')
         return tier_info
 
-    def _get_share_access_proto(self):
-        """
-        1.Multi proto:Get access proto from metadata or share instance
-        from key access_proto
-        Priority Level: metadata > share_instance
-        2.Single proto: Get access proto from share type or share instance
-        from key share_proto
-        Priority Level: share type > share_instance
-        :return:
-        """
-        metadata_access_proto = self.share_metadata.get('access_proto')
-        instance_access_proto = self.share.get('access_proto')
-
-        access_proto = metadata_access_proto or instance_access_proto
-        if access_proto:
-            return [access_proto]
-
-        return self.share_proto
-
     def _get_forbidden_dpc_param(self):
         if 'DPC' in self.share_proto:
             return constants.NOT_FORBIDDEN_DPC
