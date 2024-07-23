@@ -95,18 +95,14 @@ class CheckUpdateStorage(BaseShareProperty):
             result = self.helper.query_pool_by_id(pool_id)
             if result:
                 total = round(float(result['totalCapacity']) / 1024, 1)
-                allocated = round(float(result['allocatedCapacity']) / 1024, 1)
                 used = round(float(result['usedCapacity']) / 1024, 1)
                 free = round(float(total) - float(used), 2)
-                provisioned = used
                 pool = dict(
                     huawei_smartpartition=True,
                     huawei_smartcache=True,
                     pool_name=result['storagePoolName'],
                     qos=True,
                     compression=True,
-                    provisioned_capacity_gb=provisioned,
-                    allocated_capacity_gb=allocated,
                     free_capacity_gb=free,
                     total_capacity_gb=total,
                     reserved_percentage=reserved_percentage,
