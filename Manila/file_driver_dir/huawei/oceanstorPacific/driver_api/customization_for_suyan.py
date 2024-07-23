@@ -146,22 +146,10 @@ class CustomizationOperate(OperateShare):
         苏研单独的qos 参数设置与读取，其支持的参数如下：
              “total_bytes_sec”：总吞吐量，单位Byte/s
              “total_iops_sec”： 总IOPS，单位个/s
-        此处解析 max_band_width，从total_bytes_sec获取
+        此处解析 max_band_width，从total_bytes_sec获取    
         """
-        # the total_bytes_sec is Byte/s the pacific need MB/s
-        tmp_max_band_width = extra_specs.get('pacific:total_bytes_sec')
-        if tmp_max_band_width is None:
-            self.qos_config['max_band_width'] = constants.MAX_BAND_WIDTH
-        elif (tmp_max_band_width.strip().isdigit()
-                and 0 <= int(int(tmp_max_band_width.strip()) / constants.BYTE_TO_MB)
-                      <= constants.BAND_WIDTH_UPPER_LIMIT):
-            self.qos_config['max_band_width'] = int(math.ceil(float(
-                tmp_max_band_width.strip()) / constants.BYTE_TO_MB))
-        else:
-            err_msg = _("The total_bytes_sec in share type "
-                        "must be int([0, %s]).") % constants.BAND_WIDTH_UPPER_LIMIT
-            raise exception.InvalidInput(reason=err_msg)
-
+        self.qos_config['max_band_width'] = 0
+    
     def _get_max_iops_qos_config(self, extra_specs):
         """
         苏研单独的qos 参数设置与读取，其支持的参数如下：
@@ -169,16 +157,7 @@ class CustomizationOperate(OperateShare):
              “total_iops_sec”： 总IOPS，单位个/s
         此处解析 max_iops，从total_iops_sec获取
         """
-        tmp_max_iops = extra_specs.get('pacific:total_iops_sec')
-        if tmp_max_iops is None:
-            self.qos_config['max_iops'] = constants.MAX_IOPS
-        elif tmp_max_iops.strip().isdigit() \
-                and 0 <= int(tmp_max_iops.strip()) <= constants.MAX_IOPS_UPPER_LIMIT:
-            self.qos_config['max_iops'] = int(tmp_max_iops.strip())
-        else:
-            err_msg = _("The max_iops in share type "
-                        "must be int([0, %s]).") % constants.MAX_IOPS_UPPER_LIMIT
-            raise exception.InvalidInput(reason=err_msg)
+        self.qos_config['max_iops'] = 0
 
     def _create_qos(self):
         qos_name = self.namespace_name
@@ -219,21 +198,17 @@ class CustomizationOperate(OperateShare):
             LOG.error(err_msg)
             raise exception.InvalidShare(reason=err_msg)
 
-        tmp_max_band_width = str(qos_specs.get('total_bytes_sec'))
-        if int(tmp_max_band_width) == 0:
-            self.qos_config['max_band_width'] = constants.MAX_BAND_WIDTH
-        elif (tmp_max_band_width.strip().isdigit()
-                and 0 <= int(int(tmp_max_band_width.strip()) / constants.BYTE_TO_MB)
-                      <= constants.BAND_WIDTH_UPPER_LIMIT):
-            self.qos_config['max_band_width'] = int(math.ceil(float(
-                tmp_max_band_width.strip()) / constants.BYTE_TO_MB))
+        # total_bytes_sec and total_iops_sec must be integer
+        tmp_max_band_width = str(qos_specs.get('total_bytes_sec')).strip()
+        tmp_max_iops = str(qos_specs.get('total_iops_sec')).strip()
+        if not (tmp_max_band_width.isdigit() and tmp_max_iops.isdigit()):
+            err_msg = "total_bytes_sec and total_iops_sec must be integer, " \
+                      "the qos_specs is {0}".format(qos_specs)
+            LOG.error(err_msg)
+            raise exception.InvalidShare(reason=err_msg)
 
-        tmp_max_iops = str(qos_specs.get('total_iops_sec'))
-        if int(tmp_max_iops) == 0:
-            self.qos_config['max_iops'] = constants.MAX_IOPS
-        elif tmp_max_iops.strip().isdigit() \
-                and 0 <= int(tmp_max_iops.strip()) <= constants.MAX_IOPS_UPPER_LIMIT:
-            self.qos_config['max_iops'] = int(tmp_max_iops.strip())
+        self.qos_config['max_band_width'] = int(math.ceil(float(tmp_max_band_width) / (1024 ** 2)))
+        self.qos_config['max_iops'] = int(tmp_max_iops)
 
     def _create_qos_when_update_qos(self, qos_name):
         try:
