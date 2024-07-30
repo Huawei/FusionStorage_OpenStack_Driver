@@ -107,28 +107,29 @@ class SuyanGFSCheckUpdateStorage(CommunityCheckUpdateStorage):
         name_key = 'name'
         space_used_key = 'space_used'
         LOG.info("begin to query all share usages")
-        self._get_storage_pool_name()
         all_share_usages = {}
-        gfs_capacities_infos = self.client.get_all_gfs_capacities_info(self.storage_pool_name)
-        dtrees_capacities_infos = self.client.get_all_gfs_dtree_capacities_info(self.storage_pool_name)
-        for gfs_capacity in gfs_capacities_infos:
-            gfs_name = gfs_capacity.get(name_key)
-            quota = gfs_capacity.get('quota').get('directory_quota', {})
-            unit_type = quota.get('unit_type', constants.CAP_KB)
-            all_share_usages[gfs_name] = {
-                space_used_key: self._get_tier_capacity(quota.get(space_used_key, 0), unit_type),
-                'space_hard_quota': self._get_tier_capacity(quota.get('hard_quota', 0), unit_type)
-            }
-            self._check_and_set_tier_quota(gfs_capacity, all_share_usages, name_key)
+        for pool in self.driver_config.pool_list:
+            self.storage_pool_name = pool
+            gfs_capacities_infos = self.client.get_all_gfs_capacities_info(self.storage_pool_name)
+            dtrees_capacities_infos = self.client.get_all_gfs_dtree_capacities_info(self.storage_pool_name)
+            for gfs_capacity in gfs_capacities_infos:
+                gfs_name = gfs_capacity.get(name_key)
+                quota = gfs_capacity.get('quota').get('directory_quota', {})
+                unit_type = quota.get('unit_type', constants.CAP_KB)
+                all_share_usages[gfs_name] = {
+                    space_used_key: self._get_tier_capacity(quota.get(space_used_key, 0), unit_type),
+                    'space_hard_quota': self._get_tier_capacity(quota.get('hard_quota', 0), unit_type)
+                }
+                self._check_and_set_tier_quota(gfs_capacity, all_share_usages, name_key)
 
-        for dtree_capacities in dtrees_capacities_infos:
-            dtree_name = dtree_capacities.get(name_key)
-            quota = dtree_capacities.get('quota').get('directory_quota', {})
-            unit_type = quota.get('unit_type', constants.CAP_KB)
-            all_share_usages[dtree_name] = {
-                space_used_key: self._get_tier_capacity(quota.get(space_used_key, 0), unit_type),
-                'space_hard_quota': self._get_tier_capacity(quota.get('hard_quota', 0), unit_type),
-            }
+            for dtree_capacities in dtrees_capacities_infos:
+                dtree_name = dtree_capacities.get(name_key)
+                quota = dtree_capacities.get('quota').get('directory_quota', {})
+                unit_type = quota.get('unit_type', constants.CAP_KB)
+                all_share_usages[dtree_name] = {
+                    space_used_key: self._get_tier_capacity(quota.get(space_used_key, 0), unit_type),
+                    'space_hard_quota': self._get_tier_capacity(quota.get('hard_quota', 0), unit_type),
+                }
 
         LOG.info("successfully get all share usages")
         return all_share_usages

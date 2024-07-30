@@ -59,8 +59,8 @@ class SuyanGfsShareTier(ShareTier):
             raise exception.InvalidShare(reason=err_msg)
 
         result = self.client.create_gfs_tier_migration_policy({
-            'gfs_name_locator': name_locator.get('gfs_name_locator'),
-            'name': name_locator_info.get('migrate_policy_name'),
+            'gfs_name_locator': name_locator_info.get('gfs_name_locator'),
+            'name': name_locator_info.get('once_migrate_policy_name'),
             'migration_type': constants.DME_MIGRATE_ONCE,
             "tier_grade": strategy,
             'file_name_filter': {
@@ -285,10 +285,10 @@ class SuyanGfsShareTier(ShareTier):
         once_migrate_policy_name = gfs_name + constants.ONCE_MIGRATE_NAME
         periodicity_migrate_policy_name = gfs_name + constants.PERIODICITY_NAME
         grade_policy_name = gfs_name + constants.GRADE_NAME
-        gfs_name_locator = '@'.join([self.storage_pool_name, gfs_name])
-        once_migrate_policy_name_locator = '@'.join([gfs_name_locator, once_migrate_policy_name])
-        periodicity_migrate_policy_name_locator = '@'.join([gfs_name_locator, periodicity_migrate_policy_name])
-        grade_policy_name_locator = '@'.join([gfs_name_locator, grade_policy_name])
+        gfs_name_locator = '@'.join([gfs_name, self.storage_pool_name])
+        once_migrate_policy_name_locator = '@'.join([once_migrate_policy_name, gfs_name_locator])
+        periodicity_migrate_policy_name_locator = '@'.join([periodicity_migrate_policy_name, gfs_name_locator])
+        grade_policy_name_locator = '@'.join([grade_policy_name, gfs_name_locator])
         return {
             'gfs_name': gfs_name,
             'once_migrate_policy_name': once_migrate_policy_name,

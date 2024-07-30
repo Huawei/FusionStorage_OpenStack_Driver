@@ -238,7 +238,8 @@ class CommunityOperateShare(OperateShare):
             'forbidden_dpc': self._get_forbidden_dpc_param(),
             'storage_pool_id': self.storage_pool_id,
             'account_id': self.account_id,
-            'atime_update_mode': constants.ATIME_UPDATE_HOURS
+            'atime_update_mode': constants.ATIME_UPDATE_HOURS,
+            'case_sensitive': constants.CASE_INSENSITIVE
         }
         self.tier_info = self._get_all_share_tier_policy()
         hot_data_size = self.tier_info.get('hot_data_size')

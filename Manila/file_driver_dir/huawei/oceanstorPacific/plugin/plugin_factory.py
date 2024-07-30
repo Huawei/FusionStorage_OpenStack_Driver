@@ -27,16 +27,20 @@ LOG = log.getLogger(__name__)
 
 
 class PluginFactory(object):
-    def __init__(self, configuration, impl_type):
+    def __init__(self, configuration, impl_func):
         self.config = configuration
         # 初始化配置文件
         self.driver_config = DriverConfig(self.config)
-        self.impl_type = impl_type(self.config.product)
-
-        # 实例化client
-        self.client = self._get_client()
+        self.impl_func = impl_func
+        self.impl_type = None
+        self.client = None
 
     def reset_client(self):
+        # 配置文件校验
+        self.driver_config.update_configs()
+        # 实例化client
+        self.client = self._get_client()
+        self.impl_type = self.impl_func(self.config.product)
         return self.client.login().get('system_esn')
 
     def disconnect_client(self):
