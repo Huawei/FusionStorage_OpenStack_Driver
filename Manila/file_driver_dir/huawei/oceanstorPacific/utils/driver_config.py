@@ -35,7 +35,6 @@ class DriverConfig(object):
     def __init__(self, config):
         self.config = config
         self.last_modify_time = None
-        self.update_configs()
 
     @staticmethod
     def check_config_exist(text, config_param):
@@ -214,6 +213,7 @@ class DriverConfig(object):
             err_msg = _("Storage/HotDiskType configuration:%s "
                         "must in %s") % (text.strip(), constants.SUPPORT_DISK_TYPES)
             LOG.error(err_msg)
+            raise exception.BadConfigurationException(reason=err_msg)
         else:
             setattr(self.config, 'hot_disk_type', text.strip())
 
@@ -225,6 +225,7 @@ class DriverConfig(object):
             err_msg = _("Storage/WarmDiskType configuration:%s "
                         "must in %s") % (text.strip(), constants.SUPPORT_DISK_TYPES)
             LOG.error(err_msg)
+            raise exception.BadConfigurationException(reason=err_msg)
         else:
             setattr(self.config, 'warm_disk_type', text.strip())
 
@@ -236,6 +237,7 @@ class DriverConfig(object):
             err_msg = _("Storage/ColdDiskType configuration:%s "
                         "must in %s") % (text.strip(), constants.SUPPORT_DISK_TYPES)
             LOG.error(err_msg)
+            raise exception.BadConfigurationException(reason=err_msg)
         else:
             setattr(self.config, 'cold_disk_type', text.strip())
 

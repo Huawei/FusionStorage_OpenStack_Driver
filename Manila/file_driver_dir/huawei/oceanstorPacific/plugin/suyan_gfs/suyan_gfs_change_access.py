@@ -58,9 +58,8 @@ class SuyanGfsChangeAccess(CommunityChangeAccess):
 
     def _sync_access(self):
         gfs_param = {
-            'cluster_classification_name': self.storage_pool_name,
-            'name': self.namespace_name,
-            'is_remove_all': True
+            'gfs_name_locator': self.namespace_name + "@" + self.storage_pool_name,
+            'auth_clients': ['*']
         }
         result = self.client.remove_ipaddress_from_gfs(gfs_param)
         self.client.wait_task_until_complete(result.get('task_id'))
@@ -88,16 +87,23 @@ class SuyanGfsChangeAccess(CommunityChangeAccess):
         dpc_access_ips_list = self._get_dpc_access_ips_list()
 
         for dpc_ips in dpc_access_ips_list:
-            gfs_param = {
-                'cluster_classification_name': self.storage_pool_name,
-                'name': self.namespace_name,
-                'ip_addresses': dpc_ips
+            ips = []
+            for ip in dpc_ips:
+                ips.append({'ip': ip})
+
+            gfs_add_ip_param = {
+                'gfs_name_locator': self.namespace_name + "@" + self.storage_pool_name,
+                'auth_clients': ips
+            }
+            gfs_remove_ip_param = {
+                'gfs_name_locator': self.namespace_name + "@" + self.storage_pool_name,
+                'auth_clients': dpc_ips
             }
             if action == "allow":
                 LOG.info("Will be add dpc access.(nums: {0})".format(len(dpc_ips)))
-                result = self.client.add_ipaddress_to_gfs(gfs_param)
+                result = self.client.add_ipaddress_to_gfs(gfs_add_ip_param)
                 self.client.wait_task_until_complete(result.get('task_id'))
             elif dpc_ips:
                 LOG.info("Will be remove dpc access.(nums: {0})".format(len(dpc_ips)))
-                result = self.client.remove_ipaddress_from_gfs(gfs_param)
+                result = self.client.remove_ipaddress_from_gfs(gfs_remove_ip_param)
                 self.client.wait_task_until_complete(result.get('task_id'))

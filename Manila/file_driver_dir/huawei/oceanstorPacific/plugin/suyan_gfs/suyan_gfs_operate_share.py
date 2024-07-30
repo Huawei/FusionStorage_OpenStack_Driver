@@ -108,7 +108,7 @@ class SuyanGFSOperateShare(CommunityOperateShare):
         self._get_storage_pool_name()
         self.namespace_name = 'share-' + self.share.get('share_id')
         gfs_delete_param = {
-            'name_locator': self.storage_pool_name + '@' + self.namespace_name
+            'name_locator': self.namespace_name + '@' + self.storage_pool_name
         }
 
         # if gfs not exist, no need to query task, delete success
@@ -129,10 +129,9 @@ class SuyanGFSOperateShare(CommunityOperateShare):
     def delete_gfs_dtree(self):
         name_locator_list = []
         self._get_storage_pool_name()
-        name_locator_list.append(self.storage_pool_name)
-        name_locator_list.append('share-' + self.share_parent_id)
         name_locator_list.append('share-' + self.share.get('share_id'))
-
+        name_locator_list.append('share-' + self.share_parent_id)
+        name_locator_list.append(self.storage_pool_name)
         gfs_dtree_delete_param = {
             'name_locator': '@'.join(name_locator_list)
         }
@@ -164,7 +163,7 @@ class SuyanGFSOperateShare(CommunityOperateShare):
             # gfs场景
             new_hot_size = self._get_all_share_tier_policy().get('hot_data_size')
             gfs_name = constants.SHARE_PREFIX + self.share.get('share_id')
-            name_locator = '@'.join([cluster_name, gfs_name])
+            name_locator = '@'.join([gfs_name, cluster_name])
             # 修改GFS分级容量
             gfs_tier_cap_modify_result = self._check_and_update_gfs_tier_size(
                 name_locator, new_size, new_hot_size)
@@ -177,7 +176,7 @@ class SuyanGFSOperateShare(CommunityOperateShare):
             # dtree场景
             gfs_name = constants.SHARE_PREFIX + self.share_parent_id
             dtree_name = constants.SHARE_PREFIX + self.share.get('share_id')
-            name_locator = '@'.join([cluster_name, gfs_name, dtree_name])
+            name_locator = '@'.join([dtree_name, gfs_name, cluster_name])
             self._check_space_for_dtree(name_locator, new_size)
             modify_param = self._set_quota_param(name_locator, new_size)
             result = self.client.change_gfs_dtree_size(modify_param)
@@ -204,6 +203,7 @@ class SuyanGFSOperateShare(CommunityOperateShare):
         根据传递的qos_specs，刷新share的qos信息，
         如果没有则创建对应qos, 此接口的share不是share_instance对象是share对象
         """
+        LOG.info("Begin to update gfs qos")
         if not self.share.get('export_locations')[0]:
             err_msg = _("update share qos fail for invalid export location.")
             raise exception.InvalidShare(reason=err_msg)
@@ -211,13 +211,15 @@ class SuyanGFSOperateShare(CommunityOperateShare):
         self.namespace_name = constants.SHARE_PREFIX + self.share.get('id')
         self._get_storage_pool_name()
         qos_query_param = {
-            'gfs_names': [self.storage_pool_name + "@" + self.namespace_name]
+            'gfs_name_locator': self.namespace_name + "@" + self.storage_pool_name
         }
         update_and_create_qos_param = {
-            'gfs_name': self.storage_pool_name + "@" + self.namespace_name,
-            'name': self.namespace_name,
-            'max_ops': self.qos_config.get('max_iops'),
-            'max_mbps': self.qos_config.get('max_band_width')
+            'gfs_name_locator': self.namespace_name + "@" + self.storage_pool_name,
+            'qos_list': [{
+                'name': self.namespace_name,
+                'max_ops': self.qos_config.get('max_iops'),
+                'max_mbps': self.qos_config.get('max_band_width')
+            }]
         }
         qos_info = self.client.query_gfs_qos_policy(qos_query_param)
         if qos_info:
@@ -234,6 +236,7 @@ class SuyanGFSOperateShare(CommunityOperateShare):
             except Exception as err:
                 LOG.error("Create GFS qos task failed, reason is %s", err)
                 raise err
+        LOG.info("Success to update gfs qos")
 
     def _check_and_update_gfs_tier_size(self, name_locator, new_hard_size, new_hot_size):
         gfs_detail = self.client.query_gfs_detail(name_locator)
@@ -328,13 +331,15 @@ class SuyanGFSOperateShare(CommunityOperateShare):
         manner and wait until all tasks are complete.
         :return:
         """
-        self.gfs_name_locator = '@'.join([self.storage_pool_name, self.namespace_name])
+        self.gfs_name_locator = '@'.join([self.namespace_name, self.storage_pool_name])
         gfs_tier_grade_param, gfs_tier_migrate_param = self._check_and_get_tier_param()
         qos_param = {
-            'gfs_name': self.gfs_name_locator,
-            'name': self.namespace_name,
-            'max_ops': constants.QOS_UNLIMITED,
-            'max_mbps': constants.QOS_UNLIMITED
+            'gfs_name_locator': self.gfs_name_locator,
+            'qos_list': [{
+                'name': self.namespace_name,
+                'max_ops': constants.QOS_UNLIMITED,
+                'max_mbps': constants.QOS_UNLIMITED
+            }]
         }
         gfs_delete_param = {
             'name_locator': self.gfs_name_locator
@@ -502,7 +507,7 @@ class SuyanGFSOperateShare(CommunityOperateShare):
         self._get_storage_pool_name()
         self.namespace_name = 'share-' + self.share_parent_id
         self.gfs_dtree_param = {
-            'gfs_name_locator': self.storage_pool_name + '@' + self.namespace_name,
+            'gfs_name_locator': self.namespace_name + '@' + self.storage_pool_name,
             'dtree_name': 'share-' + self.share.get('share_id'),
             'quota': {
                 'directory_quota': {

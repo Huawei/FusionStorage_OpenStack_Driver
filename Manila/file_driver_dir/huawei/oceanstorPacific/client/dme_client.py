@@ -131,7 +131,7 @@ class DMEClient(RestClient):
             "userName": self.driver_config.user_name,
             "value": self.driver_config.user_password
         }
-        self.init_http_head(data, self.login_url)
+        self.init_http_head()
         # do login
         LOG.info("Begin to login DME storage, the login url is %s", self.login_url)
         res = self._session.put(
@@ -199,32 +199,32 @@ class DMEClient(RestClient):
         return result
 
     def add_ipaddress_to_gfs(self, gfs_params):
-        url = '/rest/fileservice/v1/gfs/dpc-auth-ip-addresses'
+        url = '/rest/fileservice/v1/gfs/dpc-auth-clients/add'
         result = self.call(url, data=gfs_params, method='POST')
         self._assert_result(result, "add the ip addresses of the dpc to the gfs failed,")
         return result
 
     def remove_ipaddress_from_gfs(self, gfs_params):
-        url = '/rest/fileservice/v1/gfs/dpc-auth-ip-addresses'
-        result = self.call(url, data=gfs_params, method='DELETE')
+        url = '/rest/fileservice/v1/gfs/dpc-auth-clients/delete'
+        result = self.call(url, data=gfs_params, method='POST')
         self._assert_result(result, "delete the ip addresses of the dpc to the gfs failed,")
         return result
 
     def change_gfs_size(self, modify_param):
-        url = '/rest/fileservice/v1/gfs'
-        result = self.call(url, data=modify_param, method='PUT')
+        url = '/rest/fileservice/v1/gfs/modify'
+        result = self.call(url, data=modify_param, method='POST')
         self._assert_result(result, "Change GFS size failed,")
         return result
 
     def change_gfs_quota_size(self, modify_param):
-        url = '/rest/fileservice/v1/gfs/quotas'
-        result = self.call(url, data=modify_param, method='PUT')
+        url = '/rest/fileservice/v1/gfs/quotas/modify'
+        result = self.call(url, data=modify_param, method='POST')
         self._assert_result(result, "Change GFS quota size failed,")
         return result
 
     def change_gfs_dtree_size(self, modify_param):
-        url = '/rest/fileservice/v1/gfs/dtrees/quotas'
-        result = self.call(url, data=modify_param, method='PUT')
+        url = '/rest/fileservice/v1/gfs/dtrees/quotas/modify'
+        result = self.call(url, data=modify_param, method='POST')
         self._assert_result(result, "Change GFS dtree size failed,")
         return result
 
@@ -238,7 +238,7 @@ class DMEClient(RestClient):
         return result
 
     def query_gfs_dtree_detail(self, name_locator):
-        url = '/rest/fileservice/v1/gfs/dtrees/detail/query'
+        url = '/rest/fileservice/v1/gfs/dtrees/detail-query'
         data = {
             "name_locator": name_locator
         }
@@ -372,19 +372,19 @@ class DMEClient(RestClient):
         return result
 
     def modify_gfs_tier_grade_policy(self, modify_param):
-        url = '/rest/fileservice/v1/gfs/tier-placement-policies'
-        result = self.call(url, data=modify_param, method='PUT')
+        url = '/rest/fileservice/v1/gfs/tier-placement-policies/modify'
+        result = self.call(url, data=modify_param, method='POST')
         self._assert_result(result, 'Modify GFS tier grade policy failed,')
         return result
 
     def modify_gfs_tier_migrate_policy(self, modify_param):
-        url = '/rest/fileservice/v1/gfs/tier-migration-policies'
-        result = self.call(url, data=modify_param, method='PUT')
+        url = '/rest/fileservice/v1/gfs/tier-migration-policies/modify'
+        result = self.call(url, data=modify_param, method='POST')
         self._assert_result(result, 'Modify GFS tier migrate policy failed,')
         return result
 
     def create_gfs_qos_policy(self, qos_param):
-        url = '/rest/fileservice/v1/gfs/qos'
+        url = '/rest/fileservice/v1/gfs/qos/create'
         result = self.call(url, data=qos_param, method='POST')
         self._assert_result(result, 'Create GFS qos policy failed, ')
         return result
@@ -393,11 +393,11 @@ class DMEClient(RestClient):
         url = '/rest/fileservice/v1/gfs/qos/query'
         result = self.call(url, data=param, method='POST')
         self._assert_result(result, 'Get gfs qos from gfs name failed,')
-        return result.get('data', [])
+        return result.get('qos_list', [])
 
     def update_gfs_qos_policy(self, param):
-        url = '/rest/fileservice/v1/gfs/qos'
-        result = self.call(url, data=param, method='PUT')
+        url = '/rest/fileservice/v1/gfs/qos/modify'
+        result = self.call(url, data=param, method='POST')
         self._assert_result(result, 'Update gfs qos from gfs name failed,')
         return result
 

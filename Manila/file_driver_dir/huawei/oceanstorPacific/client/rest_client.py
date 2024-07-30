@@ -49,6 +49,9 @@ def rest_operation_wrapper(func):
         if 'timeout' not in kwargs:
             kwargs['timeout'] = constants.SOCKET_TIMEOUT
 
+        if not self._session:
+            self.retry_relogin(None)
+
         old_token = self._session.headers.get('X-Auth-Token')
         kwargs['old_token'] = old_token
         kwargs['full_url'] = full_url
@@ -211,7 +214,7 @@ class RestClient(object):
                 url, timeout=kwargs.get('timeout'),
                 verify=self._session.verify)
 
-    def init_http_head(self, data, url):
+    def init_http_head(self):
         self._session = requests.Session()
         self._session.headers.update({
             "Connection": "keep-alive",
