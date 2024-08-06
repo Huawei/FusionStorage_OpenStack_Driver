@@ -172,6 +172,7 @@ USED_CAPACITY_ENUM = {
     DISK_TYPE_SAS: SAS_USED_CAP_KEY,
     DISK_TYPE_SATA: SATA_USED_CAP_KEY
 }
+SUPPORT_TIER_PLACE = ['hot', 'cold']
 DISK_POOL_TIER_ENUM = {
     '0': 'warm',
     '1': 'hot',

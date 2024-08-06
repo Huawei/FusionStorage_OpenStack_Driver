@@ -81,15 +81,17 @@ class SuyanGfsShareTier(ShareTier):
             'name_locator': name_locator
         })
         if len(migrate_policy) <= 0:
-            LOG.info(_("migrate_policy {0} not found".format(name_locator)))
+            LOG.warning("migrate_policy %s not found, return {}", name_locator)
             return {}
         policy = migrate_policy[0]
-        return {
+        share_tier_status = {
             "tier_status": self._dme_policy_status_to_enum_num(policy.get("policy_status")),
             "tier_process": policy.get("migration_percent"),
             "tier_type": self._dme_tier_grade_to_enum_suyan_str(policy.get("tier_grade")),
             "tier_path": policy.get("file_name_filter", {}).get("filter")
         }
+        LOG.debug("Get share tier status:%s successfully", share_tier_status)
+        return share_tier_status
 
     def terminate_share_tier(self):
         name_locator_info = self._combine_name_locator()

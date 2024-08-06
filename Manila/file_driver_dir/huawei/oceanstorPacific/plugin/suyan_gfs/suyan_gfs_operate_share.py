@@ -161,12 +161,15 @@ class SuyanGFSOperateShare(CommunityOperateShare):
         task_id_key = 'task_id'
         if not self.share_parent_id:
             # gfs场景
-            new_hot_size = self._get_all_share_tier_policy().get('hot_data_size')
+            tier_info = self._get_all_share_tier_policy()
+            self._set_tier_data_size(tier_info, new_size)
+            # check tier capacity param is valid or not
+            self._check_share_tier_capacity_param(tier_info, new_size)
             gfs_name = constants.SHARE_PREFIX + self.share.get('share_id')
             name_locator = '@'.join([gfs_name, cluster_name])
             # 修改GFS分级容量
             gfs_tier_cap_modify_result = self._check_and_update_gfs_tier_size(
-                name_locator, new_size, new_hot_size)
+                name_locator, new_size, tier_info.get('hot_data_size'))
             if gfs_tier_cap_modify_result:
                 self.client.wait_task_until_complete(gfs_tier_cap_modify_result.get(task_id_key))
             # 修改GFS配额容量
@@ -449,6 +452,7 @@ class SuyanGFSOperateShare(CommunityOperateShare):
             dpc_path = '/' + self.namespace_name
             location.append('DPC:' + dpc_path)
 
+        LOG.info("Create share successfully, the location of this share is %s", location)
         return location
 
     def _set_gfs_create_param(self):
@@ -482,16 +486,17 @@ class SuyanGFSOperateShare(CommunityOperateShare):
         :return:
         """
         disk_pool_size_limit_param = {}
-        self.tier_info = self._get_all_share_tier_policy()
-        hot_data_size = self.tier_info.get('hot_data_size')
         total_size = self.share.get('size')
+        self.tier_info = self._get_all_share_tier_policy()
+        self._set_tier_data_size(self.tier_info, self.share.get('size'))
+        # check tier capacity param is valid or not
+        self._check_share_tier_capacity_param(self.tier_info, total_size)
+        # check tier policy param is valid or not
+        self._check_share_tier_policy_param(self.tier_info)
+        hot_data_size = self.tier_info.get('hot_data_size')
         if hot_data_size is None:
             return disk_pool_size_limit_param
         hot_data_size = int(hot_data_size)
-        if hot_data_size > total_size:
-            LOG.warning("the configured hot data size %s is bigger than total size, "
-                        "set it to total siz %s", hot_data_size, total_size)
-            hot_data_size = total_size
         disk_pool_size_limit_param.update({
             'tier_hot_limit': str(driver_utils.capacity_unit_up_conversion(
                 hot_data_size, constants.BASE_VALUE, constants.POWER_BETWEEN_KB_AND_GB)),

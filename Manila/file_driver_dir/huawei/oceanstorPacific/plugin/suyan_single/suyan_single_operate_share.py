@@ -284,6 +284,7 @@ class SuyanSingleOperateShare(CommunityOperateShare):
             dpc_path = self._get_dpc_path('/' + share_path)
             location.append('DPC:' + dpc_path)
 
+        LOG.info("Create share successfully, the location of this share is %s", location)
         return location
 
     def _get_dtree_namespace_info(self):
@@ -314,6 +315,7 @@ class SuyanSingleOperateShare(CommunityOperateShare):
             share_info = share_usages.get(self.namespace_name)
 
         if not share_info:
+            LOG.info("Can not find share in share_usages. return {}")
             return {}
 
         return self._check_and_get_share_capacity(share_info)
