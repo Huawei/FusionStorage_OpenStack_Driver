@@ -37,17 +37,19 @@ class SuyanSingleCheckUpdateStorage(CommunityCheckUpdateStorage):
     @staticmethod
     def _check_and_set_tier_quota(namespace_info, all_share_usages, name_key):
         namespace_name = namespace_info.get(name_key)
-        if not namespace_info.get('tier_hot_cap_limit'):
-            LOG.info("Namespace %s not set hot_data_size, don't return ssd and hhd "
-                     "capacity", namespace_name)
+        used_key = 'used'
+        tier_hot_cap_limit = namespace_info.get('tier_hot_cap_limit')
+        tier_cold_cap_limit = namespace_info.get('tier_cold_cap_limit')
+        if tier_hot_cap_limit is None and tier_cold_cap_limit is None:
             return all_share_usages
+
         ssd_hard_quota = driver_utils.capacity_unit_up_conversion(
-                    namespace_info.get('tier_hot_cap_limit'), constants.BASE_VALUE, 1)
+                    tier_hot_cap_limit, constants.BASE_VALUE, 1)
         hdd_hard_quota = driver_utils.capacity_unit_up_conversion(
-                    namespace_info.get('tier_cold_cap_limit'), constants.BASE_VALUE, 1)
+                    tier_cold_cap_limit, constants.BASE_VALUE, 1)
         tier_perf_cap = json.loads(namespace_info.get('tier_perf_cap', '{}'))
-        ssd_space_used = tier_perf_cap.get('hot', {}).get('used', 0)
-        hdd_space_used = tier_perf_cap.get('cold', {}).get('used', 0)
+        ssd_space_used = tier_perf_cap.get('hot', {}).get(used_key)
+        hdd_space_used = tier_perf_cap.get('cold', {}).get(used_key)
         all_share_usages.get(namespace_name).update(
             {
                 'ssd_hard_quota': ssd_hard_quota,

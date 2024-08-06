@@ -72,6 +72,7 @@ class CommunityOperateShare(OperateShare):
         ssd_used_space = share_data.get("ssd_space_used")
         hdd_hard_limit = share_data.get("hdd_hard_quota")
         hdd_used_space = share_data.get("hdd_space_used")
+
         share_capacity.update({
             'ssd_hard_limit': str(ssd_hard_limit),
             'ssd_used_space': str(ssd_used_space),
@@ -81,6 +82,8 @@ class CommunityOperateShare(OperateShare):
             'hdd_avail_space': str(hdd_hard_limit - hdd_used_space)
         })
 
+        LOG.info("Get share usage:%s of share:%s from share usages successfully",
+                 share_capacity, share_data.get('name'))
         return share_capacity
 
     def create_share(self):
@@ -147,6 +150,7 @@ class CommunityOperateShare(OperateShare):
             "total_bytes_sec": 0,
             "total_iops_sec": 0
         }
+        LOG.info("Get the qos value before qos-freeze, the value is %s", share_qos_info)
         return share_qos_info
 
     def _check_domain(self):
@@ -233,6 +237,7 @@ class CommunityOperateShare(OperateShare):
 
     def _set_namespace_param(self):
         self.namespace_name = 'share-' + self.share.get('share_id')
+        total_size = self.share.get('size')
         param_dict = {
             'name': self.namespace_name,
             'forbidden_dpc': self._get_forbidden_dpc_param(),
@@ -242,15 +247,17 @@ class CommunityOperateShare(OperateShare):
             'case_sensitive': constants.CASE_INSENSITIVE
         }
         self.tier_info = self._get_all_share_tier_policy()
+        self._set_tier_data_size(self.tier_info, self.share.get('size'))
+        # check tier capacity param is valid or not
+        self._check_share_tier_capacity_param(self.tier_info, total_size)
+        # check tier policy param is valid or not
+        self._check_share_tier_policy_param(self.tier_info)
         hot_data_size = self.tier_info.get('hot_data_size')
-        total_size = self.share.get('size')
+
         if hot_data_size is None:
             return param_dict
         hot_data_size = int(hot_data_size)
-        if hot_data_size > total_size:
-            LOG.warning("the configured hot data size %s is bigger than total size, "
-                        "set it to total siz %s", hot_data_size, total_size)
-            hot_data_size = total_size
+
         param_dict.update({
             'tier_hot_cap_limit': driver_utils.capacity_unit_up_conversion(
                 hot_data_size, constants.BASE_VALUE, constants.POWER_BETWEEN_KB_AND_GB),
@@ -353,6 +360,9 @@ class CommunityOperateShare(OperateShare):
         :return: None
         """
         self.tier_info = self._get_all_share_tier_policy()
+        self._set_tier_data_size(self.tier_info, new_size)
+        # check tier capacity param is valid or not
+        self._check_share_tier_capacity_param(self.tier_info, new_size)
         current_hot_data_size = namespace_info.get('tier_hot_cap_limit', 0)
         new_hot_data_size = self.tier_info.get('hot_data_size')
 
@@ -481,6 +491,7 @@ class CommunityOperateShare(OperateShare):
         if 'HDFS' in self.share_proto:
             location.append('HDFS:/' + self.namespace_name)
 
+        LOG.info("Create share successfully, the location of this share is %s", location)
         return location
 
     def _get_quota_info(self, namespace_info, action, parent_id, new_size, parent_type):

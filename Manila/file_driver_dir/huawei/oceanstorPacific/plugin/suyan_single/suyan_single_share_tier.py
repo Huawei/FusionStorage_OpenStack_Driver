@@ -124,16 +124,18 @@ class SuyanSingleShareTier(ShareTier):
 
         if not migrate_policy:
             # 不存在分级策略报错
-            LOG.info(_("migrate_policy {0} for fs {1} not found"
-                       .format(migrate_policy_name, namespace_name)))
+            LOG.warning("migrate_policy %s for fs %s not found, return {}",
+                        migrate_policy_name, namespace_name)
             return {}
-        else:
-            return {
-                "tier_status": migrate_policy.get("policy_status"),
-                "tier_process": migrate_policy.get("migration_percent"),
-                "tier_type": self._pacific_tier_grade_to_enum_suyan_str(migrate_policy.get("strategy")),
-                "tier_path": migrate_policy.get("path_name")
-            }
+        share_tier_status = {
+            "tier_status": migrate_policy.get("policy_status"),
+            "tier_process": migrate_policy.get("migration_percent"),
+            "tier_type": self._pacific_tier_grade_to_enum_suyan_str(
+                migrate_policy.get("strategy")),
+            "tier_path": migrate_policy.get("path_name")
+        }
+        LOG.debug("Get share tier status:%s successfully", share_tier_status)
+        return share_tier_status
 
     def terminate_share_tier(self):
         self._get_account_id()

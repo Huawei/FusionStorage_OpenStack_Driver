@@ -19,6 +19,7 @@ from abc import abstractmethod
 import netaddr
 from oslo_log import log
 from manila import context as admin_context
+from manila import exception
 from manila.share import api
 from manila.share import share_types
 from manila.share import utils as share_utils
@@ -82,6 +83,70 @@ class BasePlugin(object):
             return False
         except Exception:
             return False
+
+    @staticmethod
+    def _check_share_tier_capacity_param(tier_info, total_size):
+        if (tier_info.get('hot_data_size') is None or
+                tier_info.get('cold_data_size') is None):
+            return
+
+        hot_data_size = int(tier_info.get('hot_data_size'))
+        cold_data_size = int(tier_info.get('cold_data_size'))
+
+        if hot_data_size > total_size or cold_data_size > total_size:
+            error_msg = ("Check share tier param failed, hot_data_size:%s or "
+                         "cold_data_size:%s can not bigger than share total size: %s" %
+                         (hot_data_size, cold_data_size, total_size))
+            LOG.error(error_msg)
+            raise exception.InvalidInput(error_msg)
+
+        if hot_data_size + cold_data_size != total_size:
+            error_msg = ("Check share tier param failed, hot_data_size:%s plus "
+                         "cold_data_size:%s must equal to the share total size: %s" %
+                         (hot_data_size, cold_data_size, total_size))
+            LOG.error(error_msg)
+            raise exception.InvalidInput(error_msg)
+
+        return
+
+    @staticmethod
+    def _check_share_tier_policy_param(tier_info):
+        """
+        Check share tier param is valid or not
+        """
+        hot_data_size = int(tier_info.get('hot_data_size', 0))
+        cold_data_size = int(tier_info.get('cold_data_size', 0))
+        tier_place = tier_info.get('tier_place')
+
+        if tier_place and tier_place not in constants.SUPPORT_TIER_PLACE:
+            error_msg = ("The configured tier_place:%s not in support tier place:%s, "
+                         "Please Check" % (tier_place, constants.SUPPORT_TIER_PLACE))
+            LOG.error(error_msg)
+            raise exception.InvalidInput(error_msg)
+
+        if hot_data_size and cold_data_size and not tier_place:
+            error_msg = ("Tier place:%s must be set when hot_data_size:%s and "
+                         "cold_data_size:%s all not equal to 0" %
+                         (tier_place, hot_data_size, cold_data_size))
+            LOG.error(error_msg)
+            raise exception.InvalidInput(error_msg)
+
+    @staticmethod
+    def _set_tier_data_size(tier_info, total_size):
+        """
+        set hot_data_size if cold data size configured but
+        hot data size not configured
+        """
+        hot_data_size = tier_info.get('hot_data_size')
+        cold_data_size = tier_info.get('cold_data_size')
+        if hot_data_size is None and cold_data_size is None:
+            return tier_info
+        elif hot_data_size is None:
+            tier_info['hot_data_size'] = total_size - int(cold_data_size)
+        elif cold_data_size is None:
+            tier_info['cold_data_size'] = total_size - int(hot_data_size)
+
+        return tier_info
 
     def concurrent_exec_waiting_tasks(self, task_id_list):
         # Enable Concurrent Tasks and wait until all tasks complete
@@ -159,8 +224,8 @@ class BasePlugin(object):
         """
         metadata_tier_value = self.share_metadata.get(tier_param)
         share_tier_value = self.share.get('share_tier_strategy', {}).get(tier_param)
-        tier_value = metadata_tier_value or share_tier_value
-        if tier_value:
+        tier_value = share_tier_value if metadata_tier_value is None else metadata_tier_value
+        if tier_value is not None:
             tier_info[tier_param] = tier_value
 
     def _get_all_share_tier_policy(self):
@@ -171,10 +236,13 @@ class BasePlugin(object):
         tier_info = {}
         # get hot data size
         self._get_share_tier_policy(tier_info, 'hot_data_size')
+        # get cold data size
+        self._get_share_tier_policy(tier_info, 'cold_data_size')
         # get tier_grade
         self._get_share_tier_policy(tier_info, 'tier_place')
         # get tier_migrate_expiration
         self._get_share_tier_policy(tier_info, 'tier_migrate_expiration')
+
         return tier_info
 
     def _get_forbidden_dpc_param(self):

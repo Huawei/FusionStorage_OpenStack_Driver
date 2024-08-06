@@ -133,7 +133,7 @@ class DriverConfig(object):
 
     def _nas_storage_pools(self, xml_root):
         text = xml_root.findtext('Filesystem/StoragePool')
-        self.check_config_exist(text, 'Storage/StoragePool')
+        self.check_config_exist(text, 'Filesystem/StoragePool')
 
         if self.config.product == constants.PRODUCT_PACIFIC:
             pool_is_digit_list = [pool_id.strip().isdigit() for pool_id in text.split(';')]
