@@ -1,0 +1,25 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<config>
+	<Storage>
+		<Product>Pacific_GFS</Product>
+		<RestURL>https://ip:26335</RestURL>
+		<UserName>xxx</UserName>
+		<UserPassword>xxxxxx</UserPassword>
+		<Reserved_percentage>0</Reserved_percentage>
+		<Max_over_subscription_ratio>1</Max_over_subscription_ratio>
+		<Semaphore>10</Semaphore>
+		<HotDiskType>ssd</HotDiskType>
+		<WarmDiskType>sas</WarmDiskType>
+		<ColdDiskType>sata</ColdDiskType>
+    </Storage>
+	<Filesystem>
+		<StoragePool>cluster01</StoragePool>
+		<ClusterDomainName>nfs-ip</ClusterDomainName>
+	</Filesystem>
+	<DPC>
+		<MountOption>cid={sn},rw</MountOption>
+	</DPC>
+	<NFS>
+		<MountOption>nfsvers=3</MountOption>
+	</NFS>
+</config>
