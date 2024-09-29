@@ -342,30 +342,12 @@ class CustomizationOperate(OperateShare):
         return False
 
     def _get_share_capacity(self, share_usages):
-        if self.share_parent_id:
-            share_info = share_usages.get(self.dtree_name)
-        else:
-            share_info = share_usages.get(self.namespace_name)
+        if not self.share.get('share_id'):
+            err_msg = _("There is no share_id attribution in share object:%s") % self.share
+            LOG.error(err_msg)
+            raise exception.InvalidShare(reason=err_msg)
 
-        if not share_info:
-            return {}
-
-        return self._check_and_get_share_capacity(share_info)
-
-    @staticmethod
-    def _check_and_get_share_capacity(share_data):
-        if share_data.get("space_used") is None:
-            return {}
-
-        hard_limit = int(share_data.get("space_hard_quota"))
-        used_space = int(share_data.get("space_used"))
-
-        share_capacity = {
-            "hard_limit": str(hard_limit),
-            "used_space": str(used_space),
-            "avail_space": str(hard_limit - used_space)
-        }
-        return share_capacity
+        return share_usages.get(self.share.get('share_id'), {})
 
     def _get_namespace_name_for_qos(self):
         """
@@ -473,6 +455,24 @@ class CustomizationChangeCheckUpdateStorage(CheckUpdateStorage):
     def __init__(self, helper, root):
         super(CustomizationChangeCheckUpdateStorage, self).__init__(helper, root)
 
+    @staticmethod
+    def _get_share_id_by_info_name(info_name):
+        if not info_name.startswith('share-'):
+            return ''
+
+        return info_name.split('share-')[1]
+
+    @staticmethod
+    def _set_all_share_usages(share_info, all_share_usages, share_id, units):
+        hard_limit = share_info.get('space_hard_quota', 0.0) * units
+        used_space = share_info.get('space_used', 0.0) * units
+
+        all_share_usages[share_id] = {
+            'used_space': str(int(used_space)),
+            'hard_limit': str(int(hard_limit)),
+            'avail_space': str(int(hard_limit - used_space))
+        }
+
     def _get_all_share_usages(self, all_namespace_info):
         """
         1. 将所有的命名空间信息和其名称组成键值对
@@ -482,28 +482,29 @@ class CustomizationChangeCheckUpdateStorage(CheckUpdateStorage):
 
         all_share_usages = {}
         for namespace in all_namespace_info:
-            all_share_usages[namespace.get('name')] = {
-                'id': namespace.get('id'),
-                'name': namespace.get('name'),
-                'space_used': namespace.get(
-                    'space_used', 0.0) * constants.CAPACITY_UNIT_BYTE_TO_KB,
-                'space_hard_quota': namespace.get(
-                    'space_hard_quota', 0.0) * constants.CAPACITY_UNIT_BYTE_TO_KB
-            }
+            namespace_name = namespace.get('name')
+            namespace_share_id = self._get_share_id_by_info_name(namespace_name)
+            if not namespace_share_id:
+                LOG.debug("The namespace %s is not created from manila, don't need to return", namespace_name)
+                continue
+
+            self._set_all_share_usages(namespace, all_share_usages,
+                                       namespace_share_id, constants.CAPACITY_UNIT_BYTE_TO_KB)
+
             all_dtree_info = self.helper.get_all_dtree_info_of_namespace(namespace.get('id'))
             for dtree_info in all_dtree_info:
+                dtree_name = dtree_info.get('name')
+                dtree_share_id = self._get_share_id_by_info_name(dtree_name)
+                if not dtree_share_id:
+                    LOG.debug("The dtree %s is not created from manila, don't need to return", dtree_name)
+                    continue
+
                 dtree_quota = self.helper.query_quota_by_parent(
                     dtree_info.get('id'), constants.QUOTA_PARENT_TYPE_DTREE)
-                dtree_info['spaced_used'] = dtree_quota.get('space_used', 0.0)
-                dtree_info['space_hard_quota'] = dtree_quota.get('space_hard_quota', 0.0)
-                all_share_usages[dtree_info.get('name')] = {
-                    'id': dtree_info.get('id'),
-                    'name': dtree_info.get('name'),
-                    'space_used': dtree_quota.get('space_used', 0.0),
-                    'space_hard_quota': dtree_quota.get('space_hard_quota', 0.0)
-                }
+                self._set_all_share_usages(dtree_quota, all_share_usages, dtree_share_id, 1)
 
         LOG.info("successfully get all share usages")
+        LOG.debug("The usages of all share from storage is %s", all_share_usages)
         return all_share_usages
 
     def get_all_share_usage(self):

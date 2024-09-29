@@ -207,7 +207,7 @@ class ChangeAccess(BaseShareProperty):
                     'access_level': rule.get('access_level')
                 }
             elif access_info.get('access_level') != access_level:
-                need_change_access_info['access_to'] = {
+                need_change_access_info[access_to] = {
                     'client_id': access_info.get('client_id'),
                     'access_value': rule.get('access_level'),
                 }
