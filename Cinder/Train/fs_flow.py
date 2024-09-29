@@ -294,7 +294,7 @@ class GetISCSIProperties(task.Task):
         return target_ips, target_iqns
 
     def _find_iscsi_ips(self, host_name):
-        valid_iscsi_ips, valid_node_ips = fs_utils.get_valid_iscsi_info(
+        valid_iscsi_ips, __ = fs_utils.get_valid_iscsi_info(
             self.client)
         target_ips, target_iqns = fs_utils.get_iscsi_info_from_host(
             self.client, host_name, valid_iscsi_ips)
@@ -304,15 +304,12 @@ class GetISCSIProperties(task.Task):
             (node_ips, target_ips, target_iqns
              ) = fs_utils.get_iscsi_info_from_conf(
                 self.manager_groups, iscsi_manager_groups,
-                self.configuration.use_ipv6,
-                valid_iscsi_ips, valid_node_ips, self.thread_lock)
+                self.configuration.use_ipv6, self.thread_lock, self.client)
             if target_ips:
                 self.client.add_iscsi_host_relation(host_name, node_ips)
 
         if not target_ips:
-            msg = (_(
-                "Can not find a valid target ip in iscsi_manager_groups %s")
-                   % iscsi_manager_groups)
+            msg = _("Can not find a valid target ip in %s.") % iscsi_manager_groups
             LOG.warning(msg)
             raise exception.InvalidInput(msg)
 
@@ -321,7 +318,7 @@ class GetISCSIProperties(task.Task):
         return target_ips, target_iqns
 
     def _find_iscsi_ips_from_storage(self, host_name):
-        valid_iscsi_ips, valid_node_ips = fs_utils.get_valid_iscsi_info(
+        valid_iscsi_ips, __ = fs_utils.get_valid_iscsi_info(
             self.client)
         target_ips, target_iqns = fs_utils.get_iscsi_info_from_host(
             self.client, host_name, valid_iscsi_ips)
@@ -332,13 +329,12 @@ class GetISCSIProperties(task.Task):
                 self.configuration.pools_name)
             (node_ips, target_ips, target_iqns
              ) = fs_utils.get_iscsi_info_from_storage(
-                iscsi_links, self.configuration.use_ipv6,
-                valid_iscsi_ips, valid_node_ips)
+                iscsi_links, self.configuration.use_ipv6, self.client)
             if target_ips:
                 self.client.add_iscsi_host_relation(host_name, node_ips)
 
         if not target_ips:
-            msg = _("Can not find a valid target ip")
+            msg = _("Can not find a valid target ip.")
             LOG.warning(msg)
             raise exception.InvalidInput(msg)
 
@@ -411,12 +407,14 @@ def initialize_iscsi_connection(client, vol_name, connector, iscsi_params):
     (vol_name, host_name, host_group_name, initiator_name,
      multipath) = get_iscsi_required_params(vol_name, connector)
 
-    store_spec = {'vol_name': vol_name,
-                  'host_name': host_name,
-                  'host_group_name': host_group_name,
-                  'initiator_name': initiator_name,
-                  'multipath': multipath,
-                  'connector_host_name': connector.get("host")}
+    store_spec = {
+        'vol_name': vol_name,
+        'host_name': host_name,
+        'host_group_name': host_group_name,
+        'initiator_name': initiator_name,
+        'multipath': multipath,
+        'connector_host_name': connector.get("host")
+    }
     work_flow = linear_flow.Flow('initialize_iscsi_connection')
 
     if fs_utils.is_volume_associate_to_host(client, vol_name, host_name):
@@ -445,9 +443,11 @@ def terminate_iscsi_connection(client, vol_name, connector):
     (vol_name, host_name, host_group_name,
      _, _) = get_iscsi_required_params(vol_name, connector, client)
 
-    store_spec = {'vol_name': vol_name,
-                  'host_name': host_name,
-                  'host_group_name': host_group_name}
+    store_spec = {
+        'vol_name': vol_name,
+        'host_name': host_name,
+        'host_group_name': host_group_name
+    }
     work_flow = linear_flow.Flow('terminate_iscsi_connection')
     if host_name and fs_utils.is_host_add_to_array(client, host_name):
         if fs_utils.is_volume_associate_to_host(client, vol_name, host_name):
