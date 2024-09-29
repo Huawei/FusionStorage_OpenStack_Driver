@@ -41,14 +41,18 @@ def is_volume_associate_to_host(client, vol_name, host_name):
     lun_host_list = client.get_host_by_volume(vol_name)
     for host in lun_host_list:
         if host.get('hostName') == host_name:
-            return host.get("lunId")
+            return True
+
+    return False
 
 
 def is_initiator_add_to_array(client, initiator_name):
     initiator_list = client.get_all_initiator_on_array()
     for initiator in initiator_list:
         if initiator.get('portName') == initiator_name:
-            return initiator.get('portName')
+            return True
+
+    return False
 
 
 def is_initiator_associate_to_host(client, host_name, initiator_name):
@@ -61,6 +65,8 @@ def get_target_lun(client, host_name, vol_name):
     for hostlun in hostlun_list:
         if hostlun.get("lunName") == vol_name:
             return hostlun.get("lunId")
+
+    return None
 
 
 def _get_target_portal(port_list, use_ipv6):
@@ -82,6 +88,8 @@ def get_target_portal(client, target_ip, use_ipv6):
             port_list = node_portal.get("iscsiPortalList", [])
             return _get_target_portal(port_list, use_ipv6)
 
+    return None, None
+
 
 def is_lun_in_host(client, host_name):
     hostlun_list = client.get_host_lun(host_name)
@@ -92,14 +100,18 @@ def is_host_add_to_array(client, host_name):
     all_hosts = client.get_all_host()
     for host in all_hosts:
         if host.get("hostName") == host_name:
-            return host.get("hostName")
+            return True
+
+    return False
 
 
 def is_hostgroup_add_to_array(client, host_group_name):
     all_host_groups = client.get_all_hostgroup()
     for host_group in all_host_groups:
         if host_group.get("hostGroupName") == host_group_name:
-            return host_group.get("hostGroupName")
+            return True
+
+    return False
 
 
 def is_host_group_empty(client, host_group_name):
@@ -120,6 +132,7 @@ def get_volume_params(volume, client):
 def _get_volume_type(volume):
     if volume.volume_type_id:
         return volume_types.get_volume_type(None, volume.volume_type_id)
+    return {}
 
 
 def get_volume_type_params(volume_type, client):
@@ -524,8 +537,8 @@ def _convert_day_of_week(qos, configed_none_default):
         config_days_list = qos[day_of_week].split()
         _is_config_weekday_valid(config_days_list, qos[day_of_week])
 
-        for index in range(len(constants.WEEK_DAYS)):
-            if constants.WEEK_DAYS[index] in config_days_list:
+        for index, day in enumerate(constants.WEEK_DAYS):
+            if day in config_days_list:
                 config_days += pow(2, index)
         qos[day_of_week] = int(config_days)
         configed_none_default += 1
@@ -623,7 +636,8 @@ def get_valid_iscsi_info(client):
                 iscsi_ips.append(iscsi_ip)
                 valid_iscsi_ips[iscsi_ip] = {
                     "iscsi_portal": target_portal,
-                    "iscsi_target_iqn": portal["targetName"]}
+                    "iscsi_target_iqn": portal["targetName"]
+                }
         valid_node_ips[iscsi_info["nodeMgrIp"]] = iscsi_ips
 
     LOG.info("valid iscsi ips info is: %s, valid node ips is %s",
@@ -717,7 +731,8 @@ def get_iscsi_info_from_host(client, host_name, valid_iscsi_ips):
     return target_ips, target_iqns
 
 
-def _get_target_info(manager_ips, use_ipv6, valid_iscsi_ips, valid_node_ips):
+def _get_target_info(manager_ips, use_ipv6, client):
+    valid_iscsi_ips, valid_node_ips = get_valid_iscsi_info(client)
     node_ips, target_ips, target_iqns = [], [], []
     for manager_ip in manager_ips:
         for node_ip in valid_node_ips.get(manager_ip, []):
@@ -725,15 +740,14 @@ def _get_target_info(manager_ips, use_ipv6, valid_iscsi_ips, valid_node_ips):
             if use_ipv6 ^ (ip_version == 6):
                 continue
             node_ips.append(node_ip)
-            target_ips.append(valid_iscsi_ips[node_ip]["iscsi_portal"])
-            target_iqns.append(
-                valid_iscsi_ips[node_ip]["iscsi_target_iqn"])
+            target_ips.append(valid_iscsi_ips.get(node_ip, {}).get("iscsi_portal"))
+            target_iqns.append(valid_iscsi_ips.get(node_ip, {}).get("iscsi_target_iqn"))
 
     return node_ips, target_ips, target_iqns
 
 
-def get_iscsi_info_from_conf(manager_groups, iscsi_manager_groups, use_ipv6,
-                             valid_iscsi_ips, valid_node_ips, thread_lock):
+def get_iscsi_info_from_conf(manager_groups, iscsi_manager_groups,
+                             use_ipv6, thread_lock, client):
     node_ips, target_ips, target_iqns = [], [], []
     manager_group_len = len(manager_groups + iscsi_manager_groups)
 
@@ -743,23 +757,22 @@ def get_iscsi_info_from_conf(manager_groups, iscsi_manager_groups, use_ipv6,
             manager_ips = _get_manager_ips(manager_groups)
             if not manager_groups:
                 manager_groups.extend(iscsi_manager_groups)
-        except Exception:
-            raise
+        except Exception as err:
+            # ensure release thread_lock
+            raise err
         finally:
             thread_lock.release()
 
         node_ips, target_ips, target_iqns = _get_target_info(
-            manager_ips, use_ipv6, valid_iscsi_ips, valid_node_ips)
+            manager_ips, use_ipv6, client)
         if target_ips:
             break
 
     return node_ips, target_ips, target_iqns
 
 
-def get_iscsi_info_from_storage(manager_ips, use_ipv6, valid_iscsi_ips,
-                                valid_node_ips):
-    return _get_target_info(manager_ips, use_ipv6, valid_iscsi_ips,
-                            valid_node_ips)
+def get_iscsi_info_from_storage(manager_ips, use_ipv6, client):
+    return _get_target_info(manager_ips, use_ipv6, client)
 
 
 def encode_name(my_uuid):

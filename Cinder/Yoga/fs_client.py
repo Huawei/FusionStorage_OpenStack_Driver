@@ -64,11 +64,11 @@ class RestCommon(object):
         self.session.mount(self.address, HostNameIgnoringAdapter())
 
         if mutual_authentication.get("storage_ssl_two_way_auth"):
-            self.session.verify = \
-                mutual_authentication.get("storage_ca_filepath")
-            self.session.cert = \
-                (mutual_authentication.get("storage_cert_filepath"),
-                 mutual_authentication.get("storage_key_filepath"))
+            self.session.verify = mutual_authentication.get("storage_ca_filepath")
+            self.session.cert = (
+                mutual_authentication.get("storage_cert_filepath"),
+                mutual_authentication.get("storage_key_filepath")
+            )
 
     def _construct_url(self, url, get_version, get_system_time):
         if get_system_time:
@@ -149,8 +149,7 @@ class RestCommon(object):
         })
         result = self.call(url=url, method='GET', get_version=True)
         self._assert_rest_result(result, _('Get version session error.'))
-        if result.get("currentVersion"):
-            self.version = result["currentVersion"]
+        self.version = result.get('currentVersion')
 
     def get_esn(self):
         url = "/cluster/sn"
@@ -172,7 +171,7 @@ class RestCommon(object):
         self.session.headers.update({
             "x-auth-token": self.token
         })
-        self.get_esn()
+        self.esn = self.get_esn()
 
     def logout(self):
         url = '/sec/logout'
@@ -198,12 +197,12 @@ class RestCommon(object):
     def query_pool_info(self, pool_id=None):
         pool_id = str(pool_id)
         if pool_id != 'None':
-            url = '/storagePool' + '?poolId=' + pool_id
+            url = ('/storagePool?poolId=%(pool_id)s' % {'pool_id': pool_id})
         else:
             url = '/storagePool'
         result = self.call(url, 'GET', filter_flag=True)
         self._assert_rest_result(result, _("Query pool session error."))
-        return result['storagePools']
+        return result.get('storagePools', {})
 
     def query_storage_pool_info(self):
         url = "/cluster/storagepool/queryStoragePool"
@@ -217,8 +216,10 @@ class RestCommon(object):
 
     def _query_volumes_by_batch(self, pool_id, page_num, page_size=1000):
         url = '/volume/list'
-        params = {'poolId': pool_id,
-                  'pageNum': page_num, 'pageSize': page_size}
+        params = {
+            'poolId': pool_id,
+            'pageNum': page_num, 'pageSize': page_size
+        }
 
         result = self.call(url, 'POST', params)
         if result.get('errorCode') in constants.VOLUME_NOT_EXIST:
@@ -245,9 +246,11 @@ class RestCommon(object):
     def _query_snapshot_of_volume_batch(self, vol_name, snapshot_name,
                                         batch_num=1, batch_limit=1000):
         url = '/volume/snapshot/list'
-        params = {"volName": vol_name, "batchLimit": batch_limit,
-                  "batchNum": batch_num,
-                  "filters": {"volumeName": snapshot_name}}
+        params = {
+            "volName": vol_name, "batchLimit": batch_limit,
+            "batchNum": batch_num,
+            "filters": {"volumeName": snapshot_name}
+        }
         result = self.call(url, "POST", params)
         self._assert_rest_result(
             result, 'Query snapshots of volume session error.')
@@ -258,6 +261,7 @@ class RestCommon(object):
         for res in batch_result.get('snapshotList', []):
             if res.get(snapshot_key) == snapshot_name:
                 return res
+        return None
 
     def query_snapshots_of_volume(self, vol_name, snapshot_name):
         batch_num = constants.GET_SNAPSHOT_PAGE_NUM
@@ -275,7 +279,7 @@ class RestCommon(object):
         return None
 
     def query_volume_by_name(self, vol_name):
-        url = '/volume/queryByName?volName=' + vol_name
+        url = ('/volume/queryByName?volName=%(vol_name)s' % {'vol_name': vol_name})
         result = self.call(url, 'GET')
         if result.get('errorCode') in constants.VOLUME_NOT_EXIST:
             return None
@@ -284,7 +288,7 @@ class RestCommon(object):
         return result.get('lunDetailInfo')
 
     def query_volume_by_name_v2(self, vol_name):
-        url = '/api/v2/block_service/volumes?name=' + vol_name
+        url = ('/api/v2/block_service/volumes?name=%(vol_name)s' % {'vol_name': vol_name})
         result = self.call(url, 'GET', get_system_time=True)
         if result.get('errorCode') in constants.VOLUME_NOT_EXIST:
             return {}
@@ -293,7 +297,7 @@ class RestCommon(object):
         return result.get('data', {})
 
     def query_volume_by_id(self, vol_id):
-        url = 'v1.3/volume/queryById?volId=' + vol_id
+        url = ('v1.3/volume/queryById?volId=%(vol_id)s' % {'vol_id': vol_id})
         result = self.call(url, 'GET', get_version=True)
         if result.get('errorCode') in constants.VOLUME_NOT_EXIST:
             return None
@@ -314,6 +318,7 @@ class RestCommon(object):
         if result.get('errorCode') in constants.VOLUME_NOT_EXIST:
             return None
         self._assert_rest_result(result, _('Delete volume session error.'))
+        return None
 
     def attach_volume(self, vol_name, manage_ip):
         url = '/volume/attach'
@@ -321,7 +326,7 @@ class RestCommon(object):
         result = self.call(url, "POST", params)
         self._assert_rest_result(result, _('Attach volume session error.'))
 
-        if int(result[vol_name][0]['errorCode']) != 0:
+        if int(result.get(vol_name, [])[0].get('errorCode')) != 0:
             msg = _("Host attach volume failed!")
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
@@ -342,9 +347,11 @@ class RestCommon(object):
     def _query_snapshot_by_name_batch(self, pool_id, snapshot_name,
                                       batch_num=1, batch_size=1000):
         url = '/snapshot/list'
-        params = {"poolId": pool_id, "pageNum": batch_num,
-                  "pageSize": batch_size,
-                  "filters": {"volumeName": snapshot_name}}
+        params = {
+            "poolId": pool_id, "pageNum": batch_num,
+            "pageSize": batch_size,
+            "filters": {"volumeName": snapshot_name}
+        }
 
         result = self.call(url, "POST", params)
         self._assert_rest_result(
@@ -377,13 +384,15 @@ class RestCommon(object):
         params = {"snapshotName": snapshot_name}
         result = self.call(url, "POST", params)
         if result.get('errorCode') in constants.SNAPSHOT_NOT_EXIST:
-            return None
+            return
         self._assert_rest_result(result, _('Delete snapshot session error.'))
 
     def create_volume_from_snapshot(self, snapshot_name, vol_name, vol_size):
         url = '/snapshot/volume/create'
-        params = {"src": snapshot_name, "volName": vol_name,
-                  "volSize": vol_size}
+        params = {
+            "src": snapshot_name, "volName": vol_name,
+            "volSize": vol_size
+        }
         result = self.call(url, "POST", params)
         self._assert_rest_result(
             result, _('Create volume from snapshot session error.'))
@@ -416,6 +425,7 @@ class RestCommon(object):
             return None
 
         self._assert_rest_result(result, _('Create host session error.'))
+        return None
 
     def delete_host(self, host_name):
         url = '/host/delete'
@@ -425,6 +435,7 @@ class RestCommon(object):
             return None
 
         self._assert_rest_result(result, _('Delete host session error.'))
+        return None
 
     def get_all_host(self):
         url = '/host/list'
@@ -476,8 +487,8 @@ class RestCommon(object):
         result = self.call(url, "POST", params)
         if self._is_detail_error(result, constants.HOSTGROUP_ALREADY_EXIST):
             return None
-        self._assert_rest_result(
-            result, _("Create HostGroup session error"))
+        self._assert_rest_result(result, _("Create HostGroup session error"))
+        return None
 
     def delete_hostgroup(self, host_group_name):
         url = '/hostGroup/delete'
@@ -497,10 +508,22 @@ class RestCommon(object):
         params = {"hostGroupName": host_group_name, "hostList": [host_name]}
         result = self.call(url, "POST", params)
         if self._is_detail_error(result, constants.HOST_MAPPING_GROUP_EXIST):
+            LOG.error("The host: %s has already in HostGroup: %s", host_name, host_group_name)
             return None
 
-        self._assert_rest_result(
-            result, _("Add host to HostGroup session error"))
+        if self._is_detail_error(result, constants.HOST_ALREADY_MAPPING_LUN):
+            all_host = self.get_host_in_hostgroup(host_group_name)
+            if host_name in all_host:
+                LOG.error("The host: %s has already in HostGroup: %s", host_name, host_group_name)
+                return None
+
+            msg = ("Add host to host group error, The host %s has already mapping lun "
+                   "and host not in host_group %s" % (host_name, host_group_name))
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+
+        self._assert_rest_result(result, _("Add host to HostGroup session error"))
+        return None
 
     def remove_host_from_hostgroup(self, host_group_name, host_name):
         url = '/hostGroup/host/delete'
@@ -531,8 +554,8 @@ class RestCommon(object):
         result = self.call(url, "POST", params, get_version=True)
         if self._is_detail_error(result, constants.INITIATOR_ALREADY_EXIST):
             return None
-        self._assert_rest_result(
-            result, _("Add initiator to array session error"))
+        self._assert_rest_result(result, _("Add initiator to array session error"))
+        return None
 
     def remove_initiator_from_array(self, initiator_name):
         url = 'iscsi/deletePort'
@@ -550,8 +573,8 @@ class RestCommon(object):
                 host_name)
             if initiator in associate_host_ini:
                 return None
-        self._assert_rest_result(
-            result, _("Add initiator to host session error"))
+        self._assert_rest_result(result, _("Add initiator to host session error"))
+        return None
 
     def delete_initiator_from_host(self, host_name, initiator):
         url = '/host/port/delete'
@@ -566,7 +589,7 @@ class RestCommon(object):
         result = self.call(url, "POST", params)
         self._assert_rest_result(
             result, _("Get host by initiator session error"))
-        return result['portHostMap'].get(initiator, [])
+        return result.get('portHostMap', {}).get(initiator, [])
 
     def get_target_port(self, target_ip):
         url = "/iscsi/port/list"
@@ -622,11 +645,13 @@ class RestCommon(object):
     def get_qos_volume_info(self, pool_id, qos_name,
                             batch_num=1, batch_size=5):
         url = "/qos/volume/list?type=associated"
-        params = {"pageNum": batch_num,
-                  "pageSize": batch_size,
-                  "queryType": "volume",
-                  "qosName": qos_name,
-                  "poolId": pool_id}
+        params = {
+            "pageNum": batch_num,
+            "pageSize": batch_size,
+            "queryType": "volume",
+            "qosName": qos_name,
+            "poolId": pool_id
+        }
 
         result = self.call(url, "POST", params)
         self._assert_rest_result(
@@ -670,18 +695,20 @@ class RestCommon(object):
 
     def rollback_snapshot(self, vol_name, snapshot_name):
         url = "/snapshot/rollback"
-        params = {"snapshotName": snapshot_name,
-                  "volumeName": vol_name
-                  }
+        params = {
+            "snapshotName": snapshot_name,
+            "volumeName": vol_name
+        }
         result = self.call(url, "POST", params)
         self._assert_rest_result(
             result, _("Rollback snapshot session error."))
 
     def cancel_rollback_snapshot(self, snapshot_name):
         url = "/api/v2/block_service/snapshots"
-        params = {"name": snapshot_name,
-                  "action": "cancel_rollback"
-                  }
+        params = {
+            "name": snapshot_name,
+            "action": "cancel_rollback"
+        }
         result = self.call(url, "POST", params, get_system_time=True)
         self._assert_rest_result(
             result, _("Cancel rollback snapshot session error."))
@@ -703,7 +730,7 @@ class RestCommon(object):
 
     def add_iscsi_host_relation(self, host_name, ip_list):
         if not ip_list:
-            return
+            return None
         url = "/dsware/service/iscsi/addIscsiHostRelation"
         ip_strings = ";".join(ip_list)
         params = [{"content": ip_strings, "key": host_name, "flag": 0}]
@@ -713,8 +740,8 @@ class RestCommon(object):
                 result = self.get_iscsi_host_relation(host_name)
                 if result:
                     return None
-            self._assert_rest_result(
-                result, _("Add iscsi host relation session error."))
+            self._assert_rest_result(result, _("Add iscsi host relation session error."))
+            return None
         except Exception as err:
             if constants.URL_NOT_FOUND in six.text_type(err):
                 return None
@@ -746,7 +773,7 @@ class RestCommon(object):
 
     def delete_iscsi_host_relation(self, host_name, ip_list):
         if not ip_list:
-            return
+            return False
 
         url = "/dsware/service/iscsi/deleteIscsiHostRelation"
         ip_strings = ";".join(ip_list)
@@ -755,17 +782,20 @@ class RestCommon(object):
             result = self.call(url, "POST", params, get_system_time=True)
             self._assert_rest_result(
                 result, _("Delete iscsi host relation session error."))
+            return True
         except Exception as err:
             if constants.URL_NOT_FOUND in six.text_type(err):
-                return None
+                return False
             else:
                 raise
 
     def get_iscsi_links_info(self, iscsi_link_count, pool_list):
         iscsi_ips = []
         url = "/dsware/service/iscsi/queryVbsIscsiLinks"
-        params = {"amount": iscsi_link_count,
-                  "poolList": pool_list}
+        params = {
+            "amount": iscsi_link_count,
+            "poolList": pool_list
+        }
         try:
             result = self.call(url, "POST", params, get_system_time=True)
             self._assert_rest_result(

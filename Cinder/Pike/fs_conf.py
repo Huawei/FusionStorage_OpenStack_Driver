@@ -23,6 +23,7 @@ from six.moves import configparser
 from cinder import exception
 from cinder.i18n import _
 from cinder import utils
+from cinder.volume.drivers.fusionstorage import cipher
 from cinder.volume.drivers.fusionstorage import constants
 
 
@@ -117,7 +118,7 @@ class FusionStorageConf(object):
         pwd_text = self.configuration.safe_get(constants.CONF_PWD)
         self._assert_text_result(pwd_text, mess=constants.CONF_PWD)
         pwd = self._decode_text(pwd_text)
-        setattr(self.configuration, 'san_password', pwd)
+        setattr(self.configuration, 'san_password', cipher.decrypt_cipher(pwd))
 
     def _pools_name(self):
         pools_name = self.configuration.safe_get(constants.CONF_POOLS)
