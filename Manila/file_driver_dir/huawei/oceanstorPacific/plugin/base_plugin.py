@@ -13,7 +13,8 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-
+import os
+import stat
 from abc import abstractmethod
 
 import netaddr
@@ -41,6 +42,7 @@ class BasePlugin(object):
         self.account_name = None
         self.storage_pool_id = None
         self.storage_pool_name = None
+        self.enable_qos = False # 创建Qos开关
         self.share_api = api.API()
         self.share_metadata = self._get_share_metadata()
         self.share_type_extra_specs = self._get_share_type_extra_specs()
@@ -148,6 +150,97 @@ class BasePlugin(object):
 
         return tier_info
 
+    @staticmethod
+    def _check_is_temp_file(base_dir, dir_info):
+        current_file_abs_path = os.path.join(base_dir, dir_info)
+        if not os.path.isfile(current_file_abs_path):
+            return False
+
+        if dir_info == constants.CAPACITY_DATA_FILE_NAME:
+            return True
+        if (dir_info.startswith(constants.NAMESPACE_DATA_FILE_PREFIX) or
+                dir_info.startswith(constants.DTREE_DATA_FILE_PREFIX)):
+            return True
+        return False
+
+    @staticmethod
+    def _generate_capacity_data_file(base_dir, capacity_data):
+        """
+        Write stream data in tar file and extract tarfile under the path
+        :param base_dir: file path
+        :param capacity_data: stream data returned by storage restful api
+        """
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        modes = stat.S_IWUSR | stat.S_IRUSR | stat.S_IRGRP
+        capacity_data_zip_file_path = os.path.join(base_dir, constants.CAPACITY_DATA_FILE_NAME)
+        with os.fdopen(os.open(capacity_data_zip_file_path, flags, modes), 'wb') as tar_file:
+            tar_file.write(capacity_data.content)
+        driver_utils.extract_zipfile(
+            capacity_data_zip_file_path, base_dir,
+            constants.MAX_CAPACITY_DATA_FILE_NUM, constants.MAX_CAPACITY_DATA_PER_FILE_SIZE)
+
+    @staticmethod
+    def _parse_capacity_data_file(base_dir):
+        """
+        Parse namespace and dtree capacity data from data file under the path
+        :param base_dir: file path
+        :return: namespace data list and dtree data list
+        """
+        capacity_data_file_lists = os.listdir(base_dir)
+
+        for data_file in capacity_data_file_lists:
+            abs_path = os.path.join(base_dir, data_file)
+            if not os.path.isfile(abs_path):
+                continue
+            if data_file.startswith(constants.NAMESPACE_DATA_FILE_PREFIX):
+                LOG.info("Begin to parse NameSpace capacity data file, file_name is %s", data_file)
+                with open(abs_path, 'r') as namespace_file:
+                    namespace_data_infos = namespace_file.readlines()
+            elif data_file.startswith(constants.DTREE_DATA_FILE_PREFIX):
+                LOG.info("Begin to parse Dtree capacity data file, file_name is %s", data_file)
+                with open(abs_path, 'r') as dtree_file:
+                    dtree_data_infos = dtree_file.readlines()
+            else:
+                continue
+        return namespace_data_infos, dtree_data_infos
+
+    @staticmethod
+    def _calc_tier_share_qos_mbps(pool_qos_param, hot_data_size, cold_data_size):
+        """
+        The tier share uses the sum of the hot_size'mbps and cold_size'mbps as the final max_mbps.
+        """
+        # tier share must have NFS_HDD%DPC_SSD pool_type
+        if len(pool_qos_param) < 2:
+            error_msg = ("Tier share's pool_qos_param must config to %s,"
+                         " current pool_qos_param is %s" %
+                         (constants.TIER_POOL_TYPE, pool_qos_param))
+            LOG.error(error_msg)
+            raise exception.BadConfigurationException(error_msg)
+
+        nfs_hdd_qos_coefficient = pool_qos_param.get('NFS_HDD')
+        dpc_ssd_qos_coefficient = pool_qos_param.get('DPC_SSD')
+        hot_size_to_tib = driver_utils.capacity_unit_down_conversion(
+            float(hot_data_size), constants.BASE_VALUE, constants.POWER_BETWEEN_GB_AND_TB
+        )
+        cold_size_to_tib = driver_utils.capacity_unit_down_conversion(
+            float(cold_data_size), constants.BASE_VALUE, constants.POWER_BETWEEN_GB_AND_TB
+        )
+        max_band_width = (driver_utils.qos_calc_formula(cold_size_to_tib, nfs_hdd_qos_coefficient) +
+                          driver_utils.qos_calc_formula(hot_size_to_tib, dpc_ssd_qos_coefficient))
+
+        return max_band_width
+
+    @staticmethod
+    def _calc_common_share_qos_mbps(pool_qos_param, share_size):
+        """
+        The common share uses the total share size's mbps as the final max_mbps.
+        """
+        share_size_to_tib = driver_utils.capacity_unit_down_conversion(
+            float(share_size), constants.BASE_VALUE, constants.POWER_BETWEEN_GB_AND_TB
+        )
+        for qos_coefficient in pool_qos_param.values():
+            return driver_utils.qos_calc_formula(share_size_to_tib, qos_coefficient)
+
     def concurrent_exec_waiting_tasks(self, task_id_list):
         # Enable Concurrent Tasks and wait until all tasks complete
         threading_task_list = []
@@ -223,7 +316,10 @@ class BasePlugin(object):
         :return:
         """
         metadata_tier_value = self.share_metadata.get(tier_param)
-        share_tier_value = self.share.get('share_tier_strategy', {}).get(tier_param)
+        share_tier_strategy = self.share.get('share_tier_strategy', {})
+        if not isinstance(share_tier_strategy, dict):
+            share_tier_strategy = {}
+        share_tier_value = share_tier_strategy.get(tier_param)
         tier_value = share_tier_value if metadata_tier_value is None else metadata_tier_value
         if tier_value is not None:
             tier_info[tier_param] = tier_value
@@ -272,3 +368,85 @@ class BasePlugin(object):
         if any(tier_scenarios_tuple):
             return True
         return False
+
+    def _remove_capacity_data_file(self, base_dir):
+        """
+        Delete the residual files generated under the path.
+        :param base_dir: file path
+        """
+        dir_info_lists = os.listdir(base_dir)
+        for dir_info in dir_info_lists:
+            abs_path = os.path.join(base_dir, dir_info)
+            if self._check_is_temp_file(base_dir, dir_info):
+                LOG.info("Temp file need to be clean up, file path is %s", abs_path)
+                os.remove(abs_path)
+
+    def _set_qos_param_by_size_and_type(self, share_size, hot_data_size=None, cold_data_size=None):
+        """
+        Set max_bandwidth and max_iops for common share by share_size and pool_type.
+        When share is tier share, need set max_bandwidth and max_iops
+        by hot_ata_size、cold data_size and pool_type.
+        :param share_size: share total size
+        :param hot_data_size: tier share hot data size
+        :param cold_data_size: tier share cold data size
+        :return: dict: qos_config of max_bandwidth and max_iops
+        """
+        storage_pool_id = self._get_current_storage_pool_id()
+        pool_qos_param = self.driver_config.pools_type.get(
+            storage_pool_id, {}).get('pool_qos_param')
+        if not pool_qos_param and not self.enable_qos:
+            LOG.debug("Share qos param by pool type is {}")
+            return {}
+
+        qos_config = {constants.MAX_MBPS: 0, 'max_iops': 0}
+        if not pool_qos_param and self.enable_qos:
+            LOG.debug("Share qos param by pool type is %s", qos_config)
+            return qos_config
+
+        if hot_data_size and cold_data_size:
+            qos_config[constants.MAX_MBPS] = self._calc_tier_share_qos_mbps(
+                pool_qos_param, hot_data_size, cold_data_size)
+            LOG.debug("Share qos param by pool type is %s", qos_config)
+            return qos_config
+
+        qos_config[constants.MAX_MBPS] = self._calc_common_share_qos_mbps(
+            pool_qos_param, share_size)
+        LOG.debug("Share qos param by pool type is %s", qos_config)
+        return qos_config
+
+    def _operate_share_qos(self, namespace_name, qos_config):
+        """
+        Operate share qos by qos_vals and the namespace of share's qos associate info
+        :return:
+        """
+        qos_associate_param = {
+            "filter": "[{\"qos_scale\": \"%s\" ,\"object_name\": \"%s\",\"account_id\": \"%s\"}]" %
+                      (constants.QOS_SCALE_NAMESPACE, namespace_name, self.account_id)
+        }
+        qos_param = {
+            'name': namespace_name,
+            'qos_mode': constants.QOS_MODE_MANUAL,
+            'qos_scale': constants.QOS_SCALE_NAMESPACE,
+            'account_id': self.account_id,
+            'max_mbps': int(qos_config.get('max_mbps', 0)),
+            'max_iops': int(qos_config.get('max_iops', 0)),
+        }
+        qos_association_info = self.client.get_qos_association_info(
+            qos_associate_param)
+        if not qos_config and not qos_association_info:
+            LOG.info("Qos param:%s not configured, the namespace of share not associate qos, "
+                     "do nothing", qos_config)
+        elif not qos_config and qos_association_info:
+            LOG.info("Qos param:%s not configured, the namespace of share associate qos, delete"
+                     "qos of namespace", qos_config)
+            self.client.delete_qos(namespace_name)
+        elif qos_config and not qos_association_info:
+            LOG.info("Qos param:%s is configured and the namespace did not associate qos,"
+                     "Create and associate qos to namespace:%s", qos_config, namespace_name)
+            result = self.client.create_qos(qos_param)
+            qos_policy_id = result.get('id')
+            self.client.add_qos_association(namespace_name, qos_policy_id, self.account_id)
+        else:
+            LOG.info("Qos param:%s is configured and the namespace has already associated qos,"
+                     "Update the qos info of namespace:%s", qos_config, namespace_name)
+            self.client.update_qos_info(qos_param)

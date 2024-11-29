@@ -37,7 +37,7 @@ class SuyanGfsShareTier(ShareTier):
 
     @staticmethod
     def get_impl_type():
-        return constants.PLUGIN_SUYAN_GFS_IMPL
+        return constants.PLUGIN_SUYAN_GFS_IMPL, None
 
     def initialize_share_tier(self, file_path, init_type):
         name_locator_info = self._combine_name_locator()

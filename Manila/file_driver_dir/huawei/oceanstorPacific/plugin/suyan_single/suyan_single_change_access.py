@@ -33,7 +33,7 @@ class SuyanSingleChangeAccess(CommunityChangeAccess):
 
     @staticmethod
     def get_impl_type():
-        return constants.PLUGIN_SUYAN_SINGLE_IMPL
+        return constants.PLUGIN_SUYAN_SINGLE_IMPL, None
 
     def update_access(self, access_rules, add_rules, delete_rules):
         """如果传入的参数包含parent_share_id，则走二级目录的流程"""

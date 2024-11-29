@@ -33,6 +33,7 @@ class PluginFactory(object):
         self.driver_config = DriverConfig(self.config)
         self.impl_func = impl_func
         self.impl_type = None
+        self.platform_type = None
         self.client = None
 
     def reset_client(self):
@@ -40,7 +41,8 @@ class PluginFactory(object):
         self.driver_config.update_configs()
         # 实例化client
         self.client = self._get_client()
-        self.impl_type = self.impl_func(self.config.product)
+        self.impl_type, self.platform_type = self.impl_func(
+            self.config.product, self.config.platform)
         return self.client.login().get('system_esn')
 
     def disconnect_client(self):
@@ -48,15 +50,18 @@ class PluginFactory(object):
         self.client.logout()
 
     def instance_service(self, service_type, share,
-                         storage_features=None, context=None):
+                         storage_features=None, context=None, is_use_platform=False):
         # 实例化service
         all_sub_class = self.get_sub_class(service_type)
 
+        impl_type = self.platform_type if is_use_platform else self.impl_type
+
         for sub_class in all_sub_class:
-            if sub_class.get_impl_type() == self.impl_type:
+            if impl_type in sub_class.get_impl_type():
                 LOG.info("using impl: " + sub_class.__name__)
                 return sub_class(self.client, share, self.config, context, storage_features)
-        err_msg = (_("service_type: {0}, impl_type: {1} not found".format(service_type.__name__, self.impl_type)))
+        err_msg = (_("service_type: {0}, impl_type: {1} not found".format(
+            service_type.__name__, self.impl_type)))
         raise exception.InvalidInput(reason=err_msg)
 
     def get_sub_class(self, service_type):

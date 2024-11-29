@@ -33,7 +33,7 @@ class SuyanGFSCheckUpdateStorage(CommunityCheckUpdateStorage):
 
     @staticmethod
     def get_impl_type():
-        return constants.PLUGIN_SUYAN_GFS_IMPL
+        return constants.PLUGIN_SUYAN_GFS_IMPL, None
 
     @staticmethod
     def _get_tier_capacity(size, size_unit):

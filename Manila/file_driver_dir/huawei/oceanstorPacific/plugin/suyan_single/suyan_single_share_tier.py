@@ -38,7 +38,7 @@ class SuyanSingleShareTier(ShareTier):
 
     @staticmethod
     def get_impl_type():
-        return constants.PLUGIN_SUYAN_SINGLE_IMPL
+        return constants.PLUGIN_SUYAN_SINGLE_IMPL, None
 
     @staticmethod
     def _get_tier_migrate_period_atime(migrate_period_policy):

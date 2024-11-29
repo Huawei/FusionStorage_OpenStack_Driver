@@ -42,6 +42,10 @@ class SuyanCustomizationApi(object):
         pass
 
     @abstractmethod
+    def show_qos(self, share):
+        pass
+
+    @abstractmethod
     def modify_share_tier_policy(self, context, share, new_share):
         pass
 
@@ -71,11 +75,11 @@ class HuaweiNasDriverForSuyan(HuaweiNasDriver, SuyanCustomizationApi):
         self.plugin_factory = self.plugin_factory
 
     @staticmethod
-    def _get_plugin_impl_type(backend_key=None):
+    def _get_plugin_impl_type(backend_key, platform_key):
         """重新定向苏研定制化 插件路径"""
-        if backend_key is not None:
-            return constants.SUYAN_PRODUCT_IMPL_MAPPING.get(backend_key)
-        return constants.PLUGIN_SUYAN_SINGLE_IMPL
+        platform_type = constants.PLATFORM_IMPL_MAPPING.get(platform_key)
+        impl_type = constants.SUYAN_PRODUCT_IMPL_MAPPING.get(backend_key)
+        return impl_type, platform_type
 
     def get_all_share_usage(self):
         """苏研定制接口，获取所有的share信息 返回存储上所有的share"""
@@ -106,6 +110,13 @@ class HuaweiNasDriverForSuyan(HuaweiNasDriver, SuyanCustomizationApi):
         self.plugin_factory.instance_service(
             OperateShare, share, self.storage_features).update_qos(qos_specs)
 
+    def show_qos(self, share):
+        """苏研定制接口，查询share所属命名空间的qos策略"""
+
+        LOG.info("********************Do show_qos.********************")
+        self.plugin_factory.instance_service(
+            OperateShare, share, self.storage_features).show_qos()
+
     def modify_share_tier_policy(self, context, share, new_share):
         """苏研定制接口，修改文件系统分级策略"""
         LOG.info("********************Do modify_share_tier_policy.********************")
@@ -132,7 +143,7 @@ class HuaweiNasDriverForSuyan(HuaweiNasDriver, SuyanCustomizationApi):
             ShareTier, share, self.storage_features).terminate_share_tier()
 
     def _parse_cmcc_qos_options(self, share):
-        """苏研定制接口，返回share绑定的qos信息"""
+        """苏研定制接口，返回share冻结前的qos参数。"""
 
         LOG.info("********************Do parse cmcc qos options.********************")
         share_qos_info = self.plugin_factory.instance_service(
