@@ -16,38 +16,16 @@
 
 from abc import abstractmethod
 
-from .base_plugin import BasePlugin
 
-
-class OperateShare(BasePlugin):
+class OperateSnapShot(object):
     @abstractmethod
-    def create_share(self):
+    def create_snapshot(self):
         pass
 
     @abstractmethod
-    def delete_share(self):
+    def delete_snapshot(self):
         pass
 
     @abstractmethod
-    def ensure_share(self):
-        pass
-
-    @abstractmethod
-    def change_share(self, new_size, action):
-        pass
-
-    @abstractmethod
-    def get_share_usage(self, share_usages):
-        pass
-
-    @abstractmethod
-    def update_qos(self, qos_specs):
-        pass
-
-    @abstractmethod
-    def parse_cmcc_qos_options(self):
-        pass
-
-    @abstractmethod
-    def show_qos(self):
+    def revert_to_snapshot(self):
         pass

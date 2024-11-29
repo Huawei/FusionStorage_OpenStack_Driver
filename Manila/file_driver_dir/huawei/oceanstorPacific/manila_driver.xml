@@ -1,5 +1,8 @@
 <?xml version='1.0' encoding='UTF-8'?>
 <config>
+	<Platform>
+		<ThirdPlatform>ZTE</ThirdPlatform>
+	</Platform>>
 	<Storage>
 		<Product>Pacific</Product>
 		<RestURL>https://ip:8088/api/v2/</RestURL>

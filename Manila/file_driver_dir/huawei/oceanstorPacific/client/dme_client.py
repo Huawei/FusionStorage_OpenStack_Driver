@@ -35,6 +35,9 @@ class DMEClient(RestClient):
         super(DMEClient, self).__init__(driver_config)
         self.base_url = self.driver_config.rest_url
         self.login_url = self.base_url + constants.DME_LOGIN_URL
+        self.relogin_codes = constants.DME_RETRY_RELOGIN_CODE
+        self.retry_codes = constants.DME_RETRY_CODE
+        self.retry_times = constants.DME_REQUEST_RETRY_TIMES
 
     @staticmethod
     def get_total_info_by_offset(func, extra_param):
@@ -148,12 +151,12 @@ class DMEClient(RestClient):
             "X-Auth-Token": result.get('accessSession')
         })
 
-        self._login_url = self.login_url
+        self.is_online = True
         LOG.info("Login the DME Storage success, login_url is %s" % self.login_url)
         return result
 
     def logout(self):
-        if not self._login_url:
+        if not self.is_online:
             return
 
         try:
@@ -166,7 +169,7 @@ class DMEClient(RestClient):
             self.semaphore.release()
             self._session.close()
             self._session = None
-            self._login_url = None
+            self.is_online = False
             LOG.info("Logout the DME Client success, logout_url is %s" % self.login_url)
         return
 

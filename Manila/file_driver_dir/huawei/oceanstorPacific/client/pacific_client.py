@@ -13,25 +13,31 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
+import json
 
+import six
 from oslo_log import log
-from oslo_serialization import jsonutils
-
+from oslo_utils import strutils
+import requests
 from manila import exception
 from manila.i18n import _
 
-from .send_request import SendRequest
+from .rest_client import RestClient, HostNameIgnoringAdapter
 from ..utils import constants
 
 LOG = log.getLogger(__name__)
 
 
-class PacificClient(object):
+class PacificClient(RestClient):
     """Helper class for Huawei OceanStorPacific storage system."""
 
     def __init__(self, driver_config):
-        self.send_request = SendRequest(driver_config)
-        self.call = self.send_request.call
+        super(PacificClient, self).__init__(driver_config)
+        self.base_url = self.driver_config.rest_url
+        self.login_url = self.base_url + constants.PACIFIC_LOGIN_URL
+        self.relogin_codes = [constants.ERROR_USER_OFFLINE, constants.ERROR_NO_PERMISSION]
+        self.retry_codes = list(constants.ERROR_SPECIAL_STATUS) + [constants.ERROR_URL_OPEN]
+        self.retry_times = constants.REQUEST_RETRY_TIMES
 
     @staticmethod
     def get_total_info_by_offset(func, extra_param):
@@ -66,7 +72,7 @@ class PacificClient(object):
         return True
 
     @staticmethod
-    def _error_code(result):
+    def _get_error_code(result):
         """Get error codes returned by all interfaces"""
 
         result_value = result.get('result')
@@ -80,17 +86,84 @@ class PacificClient(object):
         return error_code
 
     def login(self):
-        result = self.call()
-        return result.get('data', {})
+        """Log in huawei oceanstorPacific array."""
+        data = {
+            "username": self.driver_config.user_name,
+            "password": self.driver_config.user_password,
+            "scope": "0"
+        }
+        self.init_http_head()
+        LOG.info("Begin to login Pacific storage, the login url is %s", self.login_url)
+
+        res = self._session.post(
+            self.login_url, data=json.dumps(data),
+            timeout=constants.SOCKET_TIMEOUT,
+            verify=self._session.verify,
+            cert=self._session.cert
+        )
+
+        try:
+            res.raise_for_status()
+        except requests.HTTPError as exc:
+            LOG.error("code: %s. description: %s", exc.response.status_code, six.text_type(exc))
+            raise exc
+        result = res.json()
+
+        if not result or (result.get('result', {}).get('code') != 0) or (
+                "data" not in result):
+            err_msg = ("Login to {0} failed. Result: {1}.".format(self.login_url, result))
+            raise exception.InvalidHost(reason=err_msg)
+        result_data = result.get('data', {})
+        self._session.headers.update({
+            "X-Auth-Token": result_data.get('x_auth_token')
+        })
+        self.is_online = True
+        LOG.info("login success for url:{0}.".format(self.login_url))
+        return result_data
 
     def logout(self):
-        self.send_request.logout()
+        if not self.is_online:
+            return
+
+        try:
+            self.semaphore.acquire()
+            self._session.delete(self.login_url, timeout=constants.SOCKET_TIMEOUT)
+        except Exception as err:
+            LOG.warning("Logout Pacific Client"
+                        " failed because of %(reason)s".format(reason=err))
+        finally:
+            self.semaphore.release()
+            self._session.close()
+            self._session = None
+            self.is_online = False
+            LOG.info("Logout the Pacific Client success, logout_url is %s" % self.login_url)
+        return
+
+    def retry_relogin(self, old_token):
+        """
+        Add write lock when do re-login to
+        hang up other business restful url
+        :param old_token: the old session
+        :return:
+        """
+        with self.call_lock.write_lock():
+            self.relogin(old_token)
+
+    def relogin(self, old_token):
+        if (self._session and
+                self._session.headers.get('x_auth_token') != old_token):
+            LOG.info('Relogin has been done by other thread, '
+                     'no need relogin again.')
+            return {}
+
+        self.logout()
+        return self.login()
 
     def query_pool_info(self, pool_id=None):
         """This interface is used to query storage pools in a batch."""
 
         url = "data_service/storagepool"
-        if pool_id:
+        if pool_id is not None:
             url += "?storagePoolId={0}".format(pool_id)
         result = self.call(url, None, "GET")
 
@@ -117,8 +190,7 @@ class PacificClient(object):
         query_para = {
             'name': account_name
         }
-        data = jsonutils.dumps(query_para)
-        result = self.call(url, data, "GET")
+        result = self.call(url, query_para, "GET")
 
         result_data = result.get("data")
         if result.get('result', {}).get('code') == 0 and result_data:
@@ -138,8 +210,7 @@ class PacificClient(object):
         account_para = {
             'name': account_name
         }
-        data = jsonutils.dumps(account_para)
-        result = self.call(url, data, "POST")
+        result = self.call(url, account_para, "POST")
 
         if result.get('result', {}).get('code') == 0 and result.get("data"):
             LOG.info(_("Create account success.(account_name: {0})".format(account_name)))
@@ -156,8 +227,7 @@ class PacificClient(object):
         account_para = {
             'id': account_id
         }
-        data = jsonutils.dumps(account_para)
-        result = self.call(url, data, "DELETE")
+        result = self.call(url, account_para, "DELETE")
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Delete account success.(account_id: {0})".format(account_id)))
@@ -185,8 +255,7 @@ class PacificClient(object):
         query_para = {
             'filter': {'account_id': account_id}
         }
-        data = jsonutils.dumps(query_para)
-        result = self.call(url, data, "GET")
+        result = self.call(url, query_para, "GET")
 
         if result.get('result', {}).get('code') == 0 and result.get("data"):
             LOG.info(_("Query namespace quantity of account success.(account_id :{0})".format(account_id)))
@@ -203,8 +272,7 @@ class PacificClient(object):
         query_para = {
             'name': namespace_name
         }
-        data = jsonutils.dumps(query_para)
-        result = self.call(url, data, "GET")
+        result = self.call(url, query_para, "GET")
 
         result_data = result.get("data")
         if result.get('result', {}).get('code') == 0 and result_data:
@@ -222,8 +290,7 @@ class PacificClient(object):
 
         url = "converged_service/namespaces"
         namespace_name = namespace_param.get('name')
-        data = jsonutils.dumps(namespace_param)
-        result = self.call(url, data, "POST")
+        result = self.call(url, namespace_param, "POST")
 
         if result.get('result', {}).get('code') == 0 and result.get("data"):
             LOG.info(_("Create namespace success.(namespace_name {0})".format(namespace_name)))
@@ -240,8 +307,7 @@ class PacificClient(object):
         namespace_para = {
             'name': namespace_name
         }
-        data = jsonutils.dumps(namespace_para)
-        result = self.call(url, data, "DELETE")
+        result = self.call(url, namespace_para, "DELETE")
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Delete namespace success.(namespace_name: {0})".format(namespace_name)))
@@ -261,8 +327,7 @@ class PacificClient(object):
             "space_unit_type": constants.QUOTA_UNIT_TYPE_BYTES,
             "range": "{\"offset\": 0, \"limit\": 10}"
         }
-        data = jsonutils.dumps(query_para)
-        result = self.call(url, data, "GET")
+        result = self.call(url, query_para, "GET")
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Query quota success.(parent_id: {0})".format(parent_id)))
@@ -286,8 +351,7 @@ class PacificClient(object):
             "space_unit_type": constants.QUOTA_UNIT_TYPE_GB,
             "directory_quota_target": constants.QUOTA_TARGET_NAMESPACE
         }
-        data = jsonutils.dumps(quota_para)
-        result = self.call(url, data, "POST")
+        result = self.call(url, quota_para, "POST")
 
         if result.get('result', {}).get('code') == 0 and result.get("data"):
             LOG.info(_("Create quota success. (quota_size: {0}GB)".format(quota_size)))
@@ -304,8 +368,7 @@ class PacificClient(object):
             "space_hard_quota": new_size,
             "space_unit_type": constants.QUOTA_UNIT_TYPE_GB
         }
-        data = jsonutils.dumps(quota_para)
-        result = self.call(url, data, "PUT")
+        result = self.call(url, quota_para, "PUT")
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Change quota success.(quota_size: {0}GB)".format(new_size)))
@@ -313,30 +376,13 @@ class PacificClient(object):
             err_msg = _("Change quota failed")
             raise exception.InvalidShare(reason=err_msg)
 
-    def create_qos(self, qos_name, account_id, qos_config):
+    def create_qos(self, qos_param):
         """This interface is used to create a converged QoS policy."""
 
         url = "dros_service/converged_qos_policy"
-        qos_para = {
-            'name': qos_name,
-            'qos_mode': constants.QOS_MODE_PACKAGE,
-            'qos_scale': constants.QOS_SCALE_NAMESPACE,
-            'account_id': account_id,
-            'package_size': 10,
-            'max_band_width': qos_config['max_band_width'],
-            'basic_band_width': qos_config['basic_band_width'],
-            'bps_density': qos_config['bps_density'],
-            'max_iops': qos_config['max_iops']
-        }
-        data = jsonutils.dumps(qos_para)
-        result = self.call(url, data, "POST")
-
-        if result.get('result', {}).get('code') == 0 and result.get("data"):
-            LOG.info(_("Create qos success.(qos_name: {0})".format(qos_name)))
-        else:
-            err_msg = _("Create qos failed.(qos_name: {0})".format(qos_name))
-            raise exception.InvalidShare(reason=err_msg)
-
+        result = self.call(url, qos_param, "POST")
+        self._assert_result(result, "Create qos failed.(qos_name: {0})".format(qos_param.get('name')))
+        LOG.info(_("Create qos success.(qos_name: {0})".format(qos_param.get('name'))))
         return result.get("data")
 
     def add_qos_association(self, namespace_name, qos_policy_id, account_id):
@@ -349,8 +395,7 @@ class PacificClient(object):
             'qos_policy_id': qos_policy_id,
             'account_id': account_id
         }
-        data = jsonutils.dumps(qos_asso_para)
-        result = self.call(url, data, "POST")
+        result = self.call(url, qos_asso_para, "POST")
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Add a QoS policy association success."))
@@ -358,17 +403,35 @@ class PacificClient(object):
             err_msg = _("Add a QoS policy association failed.")
             raise exception.InvalidShare(reason=err_msg)
 
+    def get_qos_association_info(self, param):
+        """This interface is used to query converged QoS policy associations."""
+        url = "dros_service/converged_qos_association"
+        result = self.call(url, param, "GET")
+        self._assert_result(result, "Get namespace QoS policy association failed")
+        return result.get("data")
+
+    def get_qos_association_count_by_qos_id(self, param):
+        """This interface is used to query the number of converged QoS policy associations."""
+        url = "dros_service/converged_qos_association_count"
+        result = self.call(url, param, "GET")
+        self._assert_result(result, "Get QoS policy association number failed.")
+        return result.get("data")
+
+    def update_qos_info(self, qos_param):
+        url = "dros_service/converged_qos_policy"
+        result = self.call(url, qos_param, "PUT")
+        self._assert_result(result, "Change qos for share failed.(qos_name: %s)".format(qos_param.get('name')))
+        LOG.info("Change qos for share success.(qos_name: %s)", qos_param.get('name'))
+        return result
+
     def delete_qos(self, qos_name):
         """This interface is used to delete a converged QoS policy."""
-
         url = "dros_service/converged_qos_policy"
-        qos_para = {
+        qos_param = {
             'name': qos_name,
             'qos_scale': 0
         }
-        data = jsonutils.dumps(qos_para)
-        result = self.call(url, data, "DELETE")
-
+        result = self.call(url, qos_param, "DELETE")
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Delete the qos success.(qos_name: {0})".format(qos_name)))
         elif result.get('result', {}).get('code') == constants.QOS_NOT_EXIST:
@@ -382,8 +445,7 @@ class PacificClient(object):
         params = {
             "filter": {'name': name}
         }
-        data = jsonutils.dumps(params)
-        result = self.call(url, data, "GET")
+        result = self.call(url, params, "GET")
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Query tier migrate policies by name success.(tier_name: {0})".format(name)))
@@ -398,8 +460,7 @@ class PacificClient(object):
         params = {
             "filter": {'name': name}
         }
-        data = jsonutils.dumps(params)
-        result = self.call(url, data, "GET")
+        result = self.call(url, params, "GET")
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Query tier grade policies by name success.(tier_name: {0})".format(name)))
@@ -413,8 +474,7 @@ class PacificClient(object):
         """This interface is used to create the placement policy."""
 
         url = "tier_service/tier_placement_policies"
-        data = jsonutils.dumps(tier_grade_param)
-        result = self.call(url, data, "POST")
+        result = self.call(url, tier_grade_param, "POST")
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Create tier grade policy success.(tier_name: {0})"
@@ -430,8 +490,7 @@ class PacificClient(object):
         """This interface is used to create the migration policy."""
 
         url = "tier_service/tier_migrate_policies"
-        data = jsonutils.dumps(tier_migrate_param)
-        result = self.call(url, data, "POST")
+        result = self.call(url, tier_migrate_param, "POST")
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Create tier migrate policy success.(tier_name: {0})"
@@ -455,8 +514,7 @@ class PacificClient(object):
             'share_path': '/' + namespace_name,
             'account_id': account_id
         }
-        data = jsonutils.dumps(nfs_para)
-        result = self.call(url, data, "POST")
+        result = self.call(url, nfs_para, "POST")
 
         if result.get('result', {}).get('code') == 0 and result.get('data'):
             LOG.info(_("Create NFS share success.(namespace_name: {0})".format(namespace_name)))
@@ -474,8 +532,7 @@ class PacificClient(object):
             "account_id": account_id,
         }
 
-        data = jsonutils.dumps(cifs_param)
-        result = self.call(url, data, "POST")
+        result = self.call(url, cifs_param, "POST")
 
         if result.get('result', {}).get('code') == 0 and result.get('data'):
             LOG.info(_("Create CIFS share success.(namespace_name: {0})".format(namespace_name)))
@@ -492,8 +549,7 @@ class PacificClient(object):
             "filter": "[{\"fs_id\": %d, \"dtree_id\": \"%s\"}]" %
                       (fs_id, str(dtree_id))
         }
-        data = jsonutils.dumps(nfs_para)
-        result = self.call(url, data, "GET")
+        result = self.call(url, nfs_para, "GET")
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Query NFS share success.(account_id: {0})".format(account_id)))
@@ -513,8 +569,7 @@ class PacificClient(object):
             "filter": "[{\"name\":\"%s\"}]" % share_name
         }
 
-        data = jsonutils.dumps(cifs_para)
-        result = self.call(url, data, "GET")
+        result = self.call(url, cifs_para, "GET")
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Query CIFS share success.(account_id: {0})".format(account_id)))
@@ -532,8 +587,7 @@ class PacificClient(object):
             'id': nfs_share_id,
             'account_id': account_id
         }
-        data = jsonutils.dumps(nfs_para)
-        result = self.call(url, data, "DELETE")
+        result = self.call(url, nfs_para, "DELETE")
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Delete the NFS share success.(nfs_share_id: {0})".format(nfs_share_id)))
         else:
@@ -548,8 +602,7 @@ class PacificClient(object):
             "id": cifs_share_id,
             "account_id": account_id
         }
-        data = jsonutils.dumps(cifs_para)
-        result = self.call(url, data, "DELETE")
+        result = self.call(url, cifs_para, "DELETE")
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Delete the CIFS share success.(cifs_share_id: {0})".format(cifs_share_id)))
@@ -624,8 +677,7 @@ class PacificClient(object):
             'account_id': account_id,
         }
 
-        data = jsonutils.dumps(access_para)
-        result = self.call(url, data, "POST")
+        result = self.call(url, access_para, "POST")
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Add an NFS share client success.(access_to: {0})".format(access_to)))
@@ -650,8 +702,7 @@ class PacificClient(object):
             'root_squash': 1,
             'account_id': account_id,
         }
-        data = jsonutils.dumps(access_para)
-        result = self.call(url, data, "PUT")
+        result = self.call(url, access_para, "PUT")
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("change an NFS share client success.(client id: {0})".format(client_id)))
@@ -673,8 +724,7 @@ class PacificClient(object):
             "permission": access_value,
             "account_id": account_id
         }
-        data = jsonutils.dumps(query_para)
-        result = self.call(url, data, "POST")
+        result = self.call(url, query_para, "POST")
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Add an CIFS share user success.(access_to: {0})".format(access_to)))
@@ -697,8 +747,7 @@ class PacificClient(object):
             "permission": access_value,
             "account_id": account_id
         }
-        data = jsonutils.dumps(access_para)
-        result = self.call(url, data, "PUT")
+        result = self.call(url, access_para, "PUT")
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("change an CIFS share client success.(client id: {0})".format(
@@ -728,8 +777,7 @@ class PacificClient(object):
             'id': client_id,
             'account_id': account_id
         }
-        data = jsonutils.dumps(nfs_para)
-        result = self.call(url, data, "DELETE")
+        result = self.call(url, nfs_para, "DELETE")
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Delete the NFS client success.(client_id: {0})".format(client_id)))
         else:
@@ -744,8 +792,7 @@ class PacificClient(object):
             "id": user_id,
             "account_id": account_id
         }
-        data = jsonutils.dumps(query_para)
-        result = self.call(url, data, "DELETE")
+        result = self.call(url, query_para, "DELETE")
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Delete the CIFS client success.(user_id: {0})".format(user_id)))
@@ -765,8 +812,7 @@ class PacificClient(object):
             "serviceType": "eds-f"
         }
 
-        data = jsonutils.dumps(auth_para)
-        result = self.call(None, data, "POST", ex_url=url)
+        result = self.call(None, auth_para, "POST", ex_url=url)
         if result.get('result') == 0:
             LOG.info(_("Open DPC Auth switch success.(namespace_name: {0})".format(namespace_name)))
         else:
@@ -785,8 +831,7 @@ class PacificClient(object):
             "serviceType": "eds-f"
         }
 
-        data = jsonutils.dumps(access_para)
-        result = self.call(None, data, "POST", ex_url=url)
+        result = self.call(None, access_para, "POST", ex_url=url)
 
         nums = len(dpc_ip.split(','))
         if result.get('result') == 0:
@@ -807,8 +852,7 @@ class PacificClient(object):
             "serviceType": "eds-f"
         }
 
-        data = jsonutils.dumps(access_para)
-        result = self.call(None, data, "POST", ex_url=url)
+        result = self.call(None, access_para, "POST", ex_url=url)
 
         nums = len(dpc_ip.split(','))
         if result.get('result') == 0:
@@ -824,64 +868,13 @@ class PacificClient(object):
             self._get_namespace_info, [account_id])
         return totals
 
-    def query_qos_info_by_name(self, qos_name):
+    def query_qos_info(self, query_param):
         """Get qos information through qos name"""
 
         url = 'dros_service/converged_qos_policy'
-        query_para = {
-            "qos_scale": constants.QOS_SCALE_NAMESPACE,
-            "name": qos_name
-        }
-        data = jsonutils.dumps(query_para)
-        result = self.call(url, data, "GET")
-        self._assert_result(result, 'Query qos info by qos_name error.')
+        result = self.call(url, query_param, "GET")
+        self._assert_result(result, 'Query qos info error.')
         return result
-
-    def create_qos_for_suyan(self, qos_name, account_id, qos_config):
-        """Used to create a converged QoS policy for suyan."""
-
-        url = "dros_service/converged_qos_policy"
-        qos_para = {
-            'name': qos_name,
-            'qos_mode': constants.QOS_MODE_MANUAL,
-            'qos_scale': constants.QOS_SCALE_NAMESPACE,
-            'account_id': account_id,
-            'max_mbps': qos_config['max_band_width'],
-            'max_iops': qos_config['max_iops'],
-        }
-        data = jsonutils.dumps(qos_para)
-        result = self.call(url, data, "POST")
-
-        if result.get('result', {}).get('code') == 0 and result.get('data'):
-            LOG.info(_("Create qos for suyan success.(qos_name: {0})".format(qos_name)))
-        else:
-            err_msg = _("Create qos for suyan failed.(qos_name: {0})".format(qos_name))
-            raise exception.InvalidShare(reason=err_msg)
-
-        return result.get('data')
-
-    def change_qos_for_suyan(self, qos_name, account_id, qos_config):
-        """Modify qos parameters"""
-
-        url = "dros_service/converged_qos_policy"
-        qos_para = {
-            'name': qos_name,
-            'qos_mode': constants.QOS_MODE_MANUAL,
-            'qos_scale': constants.QOS_SCALE_NAMESPACE,
-            'account_id': account_id,
-            'max_mbps': qos_config['max_band_width'],
-            'max_iops': qos_config['max_iops'],
-        }
-        data = jsonutils.dumps(qos_para)
-        result = self.call(url, data, "PUT")
-
-        if result.get('result', {}).get('code') == 0:
-            LOG.info(_("Change qos for suyan success.(qos_name: {0})".format(qos_name)))
-        else:
-            err_msg = _("Change qos for suyan failed.(qos_name: {0})".format(qos_name))
-            raise exception.InvalidShare(reason=err_msg)
-
-        return
 
     def create_dtree(self, dtree_name, namespace_name):
         """create dtree by namespace name"""
@@ -891,8 +884,7 @@ class PacificClient(object):
             'name': dtree_name,
             'file_system_name': namespace_name
         }
-        data = jsonutils.dumps(dtree_params)
-        result = self.call(url, data, 'POST')
+        result = self.call(url, dtree_params, 'POST')
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Create dtree of namespace success.(dtree_name: {0},"
@@ -934,8 +926,7 @@ class PacificClient(object):
             'share_path': '/' + namespace_name + '/' + dtree_name,
             'account_id': account_id
         }
-        data = jsonutils.dumps(nfs_para)
-        result = self.call(url, data, "POST")
+        result = self.call(url, nfs_para, "POST")
 
         if result.get('result', {}).get('code') == 0 and result.get('data'):
             LOG.info(_("Create Dtree NFS share success."
@@ -955,8 +946,7 @@ class PacificClient(object):
             "account_id": account_id,
         }
 
-        data = jsonutils.dumps(cifs_param)
-        result = self.call(url, data, "POST")
+        result = self.call(url, cifs_param, "POST")
 
         if result.get('result', {}).get('code') == 0 and result.get('data'):
             LOG.info(_("Create Dtree CIFS share success."
@@ -974,8 +964,7 @@ class PacificClient(object):
             'file_system_id': namespace_id,
             'filter': {'name': dtree_name}
         }
-        data = jsonutils.dumps(query_para)
-        result = self.call(url, data, "GET")
+        result = self.call(url, query_para, "GET")
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Query dtree success.(dtree_name: {0})".format(dtree_name)))
@@ -1005,8 +994,7 @@ class PacificClient(object):
         query_param = {
             'storagePoolId': storagepool_id
         }
-        data = jsonutils.dumps(query_param)
-        result = self.call(url, data, "GET")
+        result = self.call(url, query_param, "GET")
         self._assert_result(result, 'Query disk pool info error.')
         return result.get('diskPools', [])
 
@@ -1026,8 +1014,7 @@ class PacificClient(object):
             'strategy': strategy,
             'account_id': account_id
         }
-        data = jsonutils.dumps(param)
-        result = self.call(url, data, "PUT")
+        result = self.call(url, param, "PUT")
         self._assert_result(result, "Modify tier grade policy failed")
 
     def delete_tier_grade_policy_by_id(self, tier_id, account_id):
@@ -1035,8 +1022,7 @@ class PacificClient(object):
         param = {
             'account_id': account_id
         }
-        data = jsonutils.dumps(param)
-        result = self.call(url, data, "DELETE")
+        result = self.call(url, param, "DELETE")
         result_code = result.get('result', {}).get('code')
         if result_code == 0:
             LOG.info("Delete tier placement policy successfully,"
@@ -1057,8 +1043,7 @@ class PacificClient(object):
             'atime_unit': constants.HTIME_UNIT,
             'account_id': account_id
         }
-        data = jsonutils.dumps(param)
-        result = self.call(url, data, "PUT")
+        result = self.call(url, param, "PUT")
         self._assert_result(result, "Modify tier migrate policy failed")
 
     def delete_tier_migrate_policy_by_id(self, tier_id, account_id):
@@ -1066,8 +1051,7 @@ class PacificClient(object):
         param = {
             'account_id': account_id
         }
-        data = jsonutils.dumps(param)
-        result = self.call(url, data, "DELETE")
+        result = self.call(url, param, "DELETE")
         result_code = result.get('result', {}).get('code')
         if result_code == 0:
             LOG.info("Delete tier migrate policy successfully,"
@@ -1092,8 +1076,7 @@ class PacificClient(object):
             'fs_id': namespace_id,
             'account_id': account_id
         }
-        data = jsonutils.dumps(param)
-        result = self.call(url, data, "DELETE")
+        result = self.call(url, param, "DELETE")
         result_code = result.get('result', {}).get('code')
         if result_code == 0:
             LOG.info("Delete tier placement policy successfully,"
@@ -1118,8 +1101,7 @@ class PacificClient(object):
             'fs_id': namespace_id,
             'account_id': account_id
         }
-        data = jsonutils.dumps(param)
-        result = self.call(url, data, "DELETE")
+        result = self.call(url, param, "DELETE")
         result_code = result.get('result', {}).get('code')
         if result_code == 0:
             LOG.info("Delete tier migrate policy successfully,"
@@ -1138,8 +1120,7 @@ class PacificClient(object):
         :return:
         """
         url = 'converged_service/namespaces'
-        data = jsonutils.dumps(update_param)
-        result = self.call(url, data, "PUT")
+        result = self.call(url, update_param, "PUT")
         self._assert_result(result, 'Query storage tier global cfg failed')
 
     def get_esn(self):
@@ -1152,14 +1133,80 @@ class PacificClient(object):
         self._assert_result(result, 'Query storage tier global cfg failed')
         return result.get('data', {}).get('esn')
 
+    def create_snapshot(self, param):
+        """
+        This interface is used to create a namespace snapshot.
+        :param:
+        :return:
+        """
+        url = 'converged_service/snapshots'
+        result = self.call(url, param, "POST")
+        self._assert_result(result, 'Create a namespace snapshot failed')
+
+    def delete_snapshot(self, param):
+        """
+        This interface is used to delete a namespace snapshot by its name.
+        :param:
+        :return:
+        """
+        url = 'converged_service/snapshots'
+        result = self.call(url, param, "DELETE")
+        result_code = result.get('result', {}).get('code')
+        if result_code == 0:
+            LOG.info("Delete a namespace snapshot successfully")
+        elif result_code == constants.SNAPSHOT_NOT_EXIST:
+            LOG.info("Snapshot not exist, skip it")
+        else:
+            err_msg = "Delete a namespace snapshot failed"
+            LOG.error(err_msg)
+            raise exception.InvalidShare(reason=err_msg)
+
+    def rollback_snapshot(self, param):
+        """	This interface is used to roll back with a specified snapshot name."""
+        url = 'converged_service/rollback_snapshot'
+        result = self.call(url, param, "PUT")
+        self._assert_result(result, "Rollback snapshot failed")
+
+    def query_snapshot_info(self, param):
+        """
+        This interface is used to query a namespace snapshot by its name.
+        :param:
+        :return:snapshot_id
+        """
+        url = 'converged_service/snapshots'
+        result = self.call(url, param, "GET")
+        result_code = result.get('result', {}).get('code')
+        if result_code == 0:
+            LOG.info("Query a namespace snapshot successfully")
+            return result.get('data')
+        elif result_code == constants.SNAPSHOT_NOT_EXIST:
+            LOG.info("Snapshot not exist, skip it")
+            return {}
+        else:
+            err_msg = "Query a namespace snapshot failed"
+            LOG.error(err_msg)
+            raise exception.InvalidShare(reason=err_msg)
+
+    def get_capacity_data_file(self):
+        url = 'pms/latest_nd_capacity_performance_file'
+        result = self.call(url, method="GET")
+        self._assert_result(result, "Query namespace and dtree latest capacity data failed")
+        return result.get('data')
+
     def _assert_result(self, result, msg_format, *args):
         """Determine error codes, print logs and report errors"""
 
-        if self._error_code(result) != 0:
+        if self._get_error_code(result) != 0:
             args += (result,)
             msg = (msg_format + '\nresult: %s.') % args
             LOG.error(msg)
             raise exception.InvalidShare(msg)
+
+    def _error_code(self, res):
+        status_code = res.status_code
+        error_code = self._get_error_code(res.json())
+        LOG.debug("Response http code is %s, error_code is %s", status_code, error_code)
+        return status_code, error_code
 
     def _get_namespace_info(self, offset, extra_param):
         """Get namespace information in batches"""
@@ -1170,8 +1217,7 @@ class PacificClient(object):
                       "limit": constants.MAX_QUERY_COUNT},
             "filter": {"account_id": extra_param[0]}
         }
-        data = jsonutils.dumps(query_para)
-        result = self.call(url, data, "GET")
+        result = self.call(url, query_para, "GET")
         self._assert_result(result, 'Batch query namespaces info error.')
         return result
 
@@ -1193,8 +1239,7 @@ class PacificClient(object):
             "account_id": extra_param[1],
         }
 
-        data = jsonutils.dumps(filter_para)
-        result = self.call(url, data, "GET")
+        result = self.call(url, filter_para, "GET")
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Query CIFS share user success.(cifs_share_id: {0})".format(extra_param[0])))
@@ -1222,8 +1267,7 @@ class PacificClient(object):
             "account_id": extra_param[1]
         }
 
-        data = jsonutils.dumps(filter_para)
-        result = self.call(url, data, "GET")
+        result = self.call(url, filter_para, "GET")
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Query NFS share clients success.(nfs_share_id: {0})".format(extra_param[0])))
@@ -1242,7 +1286,6 @@ class PacificClient(object):
             "range": {"offset": offset,
                       "limit": constants.MAX_QUERY_COUNT}
         }
-        data = jsonutils.dumps(query_para)
-        result = self.call(url, data, "GET")
+        result = self.call(url, query_para, "GET")
         self._assert_result(result, 'Batch query dtree info error.')
         return result

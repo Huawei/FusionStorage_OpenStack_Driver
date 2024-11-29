@@ -34,7 +34,7 @@ class SuyanGfsChangeAccess(CommunityChangeAccess):
 
     @staticmethod
     def get_impl_type():
-        return constants.PLUGIN_SUYAN_GFS_IMPL
+        return constants.PLUGIN_SUYAN_GFS_IMPL, None
 
     def update_access(self, access_rules, add_rules, delete_rules):
         if add_rules:

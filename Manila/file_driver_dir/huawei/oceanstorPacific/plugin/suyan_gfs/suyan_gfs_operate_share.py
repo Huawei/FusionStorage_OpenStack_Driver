@@ -39,7 +39,7 @@ class SuyanGFSOperateShare(CommunityOperateShare):
 
     @staticmethod
     def get_impl_type():
-        return constants.PLUGIN_SUYAN_GFS_IMPL
+        return constants.PLUGIN_SUYAN_GFS_IMPL, None
 
     @staticmethod
     def _set_quota_param(name_locator, new_size):
@@ -221,7 +221,7 @@ class SuyanGFSOperateShare(CommunityOperateShare):
             'qos_list': [{
                 'name': self.namespace_name,
                 'max_ops': self.qos_config.get('max_iops'),
-                'max_mbps': self.qos_config.get('max_band_width')
+                'max_mbps': self.qos_config.get('max_mbps')
             }]
         }
         qos_info = self.client.query_gfs_qos_policy(qos_query_param)

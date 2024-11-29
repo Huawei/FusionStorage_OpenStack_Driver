@@ -40,7 +40,11 @@ class HostNameIgnoringAdapter(HTTPAdapter):
 def rest_operation_wrapper(func):
     @functools.wraps(func)
     def wrapped(self, url, **kwargs):
-        full_url = self.base_url + url
+        if kwargs.get('ex_url'):
+            full_url = self.base_url.replace('/api/v2/', kwargs.get('ex_url'))
+        else:
+            full_url = self.base_url + url
+
         if not kwargs.get('log_filter'):
             LOG.info('URL: %(url)s Method: %(method)s Data: %(data)s',
                      {'url': full_url, 'method': func.__name__,
@@ -82,22 +86,16 @@ def check_retry(self, func, kwargs):
     if need retry will retry until the function don't catch defined error
     or reach the max retry times, and the last retry time will not catch error.
     """
-    for retry_time in range(constants.DME_REQUEST_RETRY_TIMES):
+    for retry_time in range(self.retry_times):
         retry_interval = driver_utils.get_retry_interval(retry_time + 1)
+        LOG.debug("The retry interval time is %ss", retry_interval)
         result = do_retry(self, func, retry_interval, kwargs)
         if result:
             return result
 
     with self.call_lock.read_lock():
         res = func(self, kwargs.get('full_url'), **kwargs)
-    duration_time = res.elapsed.total_seconds()
-    result = res.json()
-    if not isinstance(result, dict):
-        result = {'data': result}
-    _, error_code = self._error_code(res)
-    result['duration'] = duration_time
-    result['error_code'] = error_code
-    return result
+    return construct_result_info(self, res)
 
 
 def do_retry(self, func, retry_interval, kwargs):
@@ -114,30 +112,56 @@ def do_retry(self, func, retry_interval, kwargs):
         self.retry_relogin(old_token)
         return {}
     else:
-        duration_time = res.elapsed.total_seconds()
-        result = res.json()
+        result = construct_result_info(self, res)
+        if not result.get('need_check_retry'):
+            return result
+
         status_code, error_code = self._error_code(res)
-        if not isinstance(result, dict):
-            result = {'data': result}
-        if any((error_code in constants.DME_RETRY_RELOGIN_CODE,
-                status_code in constants.DME_RETRY_RELOGIN_CODE)):
+        if any((error_code in self.relogin_codes,
+                status_code in self.relogin_codes)):
             LOG.warning("the error code is abnormal, "
                         "trying to retry, the url is %s,"
                         "result info is %s" % (full_url, result))
             time.sleep(retry_interval)
             self.retry_relogin(old_token)
             return {}
-        elif any((error_code in constants.DME_RETRY_CODE,
-                  status_code in constants.DME_RETRY_CODE)):
+        elif any((error_code in self.retry_codes,
+                  status_code in self.retry_codes)):
             LOG.warning("the error code is abnormal, "
                         "trying to retry, the url is %s,"
                         "result info is %s" % (full_url, result))
             time.sleep(retry_interval)
             return {}
         else:
-            result['duration'] = duration_time
-            result['error_code'] = error_code
             return result
+
+
+def construct_result_info(self, res):
+    """
+    construct result by content_type in response.headers
+    if stream content, don't need to do json format
+    :param self: RestClient instance object
+    :param res: request response
+    :return: response result
+    """
+    duration_time = res.elapsed.total_seconds()
+    result_type = res.headers.get('Content-Type')
+    if result_type == constants.CONTENT_TYPE_STREAM:
+        result = {
+            'data': res,
+            'duration': duration_time,
+            'result': 0
+        }
+        return result
+
+    result = res.json()
+    _, error_code = self._error_code(res)
+    if not isinstance(result, dict):
+        result = {'data': result}
+    result['duration'] = duration_time
+    result['error_code'] = error_code
+    result['need_check_retry'] = True
+    return result
 
 
 class RestClient(object):
@@ -146,11 +170,7 @@ class RestClient(object):
         self.semaphore = threading.Semaphore(self.driver_config.semaphore)
         self.call_lock = lockutils.ReaderWriterLock()
         self._session = None
-        self._login_url = None
-
-    @staticmethod
-    def _error_code(res):
-        raise NotImplementedError
+        self.is_online = False
 
     def retry_relogin(self, old_token):
         raise NotImplementedError
@@ -169,8 +189,10 @@ class RestClient(object):
             'ex_url': ex_url,
             'log_filter': log_filter
         }
+        if data is not None:
+            kwargs['data'] = data
 
-        return func(url, data=data, **kwargs)
+        return func(url, **kwargs)
 
     @rest_operation_wrapper
     @rest_set_semaphore
@@ -224,5 +246,13 @@ class RestClient(object):
         self._session.verify = False
         if ssl_verify:
             self._session.verify = self.driver_config.ssl_cert_path
+        mutual_authentication = self.driver_config.mutual_authentication
+        if mutual_authentication.get(constants.CONF_STORAGE_SSL_TWO_WAY_AUTH):
+            LOG.info("Begin two-way authentication certificate")
+            self._session.verify = mutual_authentication.get(constants.CONF_STORAGE_CA_FILEPATH)
+            self._session.cert = (
+                mutual_authentication.get(constants.CONF_STORAGE_CERT_FILEPATH),
+                mutual_authentication.get(constants.CONF_STORAGE_KEY_FILEPATH)
+            )
         self._session.mount(self.driver_config.rest_url.lower(),
                             HostNameIgnoringAdapter())
