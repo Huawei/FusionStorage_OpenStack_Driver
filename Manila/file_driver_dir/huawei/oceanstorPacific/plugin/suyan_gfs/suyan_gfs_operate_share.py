@@ -459,10 +459,13 @@ class SuyanGFSOperateShare(CommunityOperateShare):
         self._get_storage_pool_name()
         self.namespace_name = 'share-' + self.share.get('share_id')
         gfs_param = {
-            'cluster_classification_name': self.storage_pool_name,
+            'gfs_group_name': self.storage_pool_name,
             'name': self.namespace_name,
             'scattered_num': self._get_scattered_value('scattered_num'),
             'scattered_level': self._get_scattered_value('scattered_level'),
+            'enable_update_atime': constants.ENABLE_UPDATE_ATIME,
+            'atime_update_mode': constants.ATIME_UPDATE_HOURS,
+            'case_sensitive': constants.CASE_INSENSITIVE,
             'quota': {
                 'directory_quota': {
                     'space_quota': {
@@ -472,6 +475,9 @@ class SuyanGFSOperateShare(CommunityOperateShare):
                         'unit_type': constants.DME_DEFAULT_CAPACITY_UNIT
                     }
                 }
+            },
+            'access': {
+                'dpc_switch': self._set_dpc_switch()
             }
         }
         # set tier data capacity limit
@@ -479,6 +485,11 @@ class SuyanGFSOperateShare(CommunityOperateShare):
         if disk_pool_size_limit_param:
             gfs_param['disk_pool_limit'] = disk_pool_size_limit_param
         self.gfs_param = gfs_param
+
+    def _set_dpc_switch(self):
+        if 'DPC' in self.share_proto:
+            return constants.ENABLE_DPC
+        return False
 
     def _set_disk_pool_size_limit_param(self):
         """

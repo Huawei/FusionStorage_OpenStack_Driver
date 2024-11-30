@@ -184,9 +184,12 @@ class DMEClient(RestClient):
         return self.login()
 
     def query_cluster_statistics_by_name(self, cluster_name):
-        url = '/rest/storagemgmt/v1/cluster-classifications/statistics?name=%s' % cluster_name
-        result = self.call(url, method='GET')
-        self._assert_result(result, "query cluster classifications failed,")
+        url = '/rest/fileservice/v1/gfs-groups/query-summary'
+        query_param = {
+            'name': cluster_name
+        }
+        result = self.call(url, data=query_param, method='POST')
+        self._assert_result(result, "Query cluster classifications failed,")
         return result
 
     def create_gfs(self, gfs_param):
