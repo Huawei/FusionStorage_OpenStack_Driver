@@ -92,14 +92,6 @@ class SuyanSingleOperateShare(CommunityOperateShare):
     def get_share_usage(self, share_usages):
         """苏研定制接口，通过share_usages获取对应share的容量信息"""
 
-        if (not self.share.get('export_locations') or not self.share.get(
-                'export_locations')[0].get('path')):
-            err_msg = _("Get namespace_name fail for invalid export location.")
-            LOG.error(err_msg)
-            raise exception.InvalidShare(reason=err_msg)
-
-        self._get_parent_name_from_export_locations()
-
         return self._get_share_capacity(share_usages)
 
     def delete_share(self):
@@ -282,16 +274,19 @@ class SuyanSingleOperateShare(CommunityOperateShare):
         return False
 
     def _get_share_capacity(self, share_usages):
-        if self.share_parent_id:
-            share_info = share_usages.get(self.dtree_name)
-        else:
-            share_info = share_usages.get(self.namespace_name)
+        if not self.share.get('share_id'):
+            err_msg = _("There is no share_id attribution in share object:%s") % self.share
+            LOG.error(err_msg)
+            raise exception.InvalidShare(reason=err_msg)
 
-        if not share_info:
+        share_usage = share_usages.get(self.share.get('share_id'), {})
+        if not share_usage:
             LOG.info("Can not find share in share_usages. Try to get share capacity from storage")
             return self._get_share_capacity_from_storage()
 
-        return self._check_and_get_share_capacity(share_info)
+        LOG.info("Get share usage:%s of share:%s from share_usages successfully",
+                 share_usage, self.share.get('share_id'))
+        return share_usage
 
     def _get_namespace_name_from_location(self, export_location):
         """
@@ -326,12 +321,20 @@ class SuyanSingleOperateShare(CommunityOperateShare):
             raise exception.InvalidInput(reason=err_msg)
 
     def _get_share_capacity_from_storage(self):
+        if (not self.share.get('export_locations') or not self.share.get(
+                'export_locations')[0].get('path')):
+            LOG.error("Get namespace_name fail for invalid export location:%s.",
+                      self.share.get('export_locations'))
+            return {}
+
+        self._get_parent_name_from_export_locations()
+
         share_capacity = {}
         namespace_info = self.client.query_namespace_by_name(self.namespace_name)
         if not namespace_info:
             err_msg = "Can not found namespace of share from storage, namespace name is %s." % self.namespace_name
             LOG.error(err_msg)
-            raise exception.InvalidShare(reason=err_msg)
+            return share_capacity
 
         self.namespace_id = namespace_info.get('id')
         if not self.share_parent_id:
@@ -378,9 +381,9 @@ class SuyanSingleOperateShare(CommunityOperateShare):
     def _get_dtree_capacity(self, share_capacity):
         dtree_info = self.client.query_dtree_by_name(self.dtree_name, self.namespace_id)
         if not dtree_info:
-            err_msg = "Can not found dtree of share from storage, dtree name is %s." % self.namespace_name
+            err_msg = "Can not found dtree of share from storage, dtree name is %s." % self.dtree_name
             LOG.error(err_msg)
-            raise exception.InvalidShare(reason=err_msg)
+            return share_capacity
 
         for info in dtree_info:
             self.dtree_id = info.get('id')

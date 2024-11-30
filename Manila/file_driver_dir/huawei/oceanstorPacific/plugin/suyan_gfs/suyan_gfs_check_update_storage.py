@@ -155,3 +155,39 @@ class SuyanGFSCheckUpdateStorage(CommunityCheckUpdateStorage):
             }
         )
         return all_share_usages
+
+    def _set_tier_capacity(self, system_capacity, unit_power):
+        """
+        report system ssd,sata,sas total、free、used capacity
+        :return:
+        """
+        hot_total_capacity = float(system_capacity.get(constants.DME_TOTAL_CAPACITY_ENUM.get(
+            self.driver_config.hot_disk_type, constants.DME_SSD_TOTAL_CAP_KEY), 0))
+        warm_total_capacity = float(system_capacity.get(constants.DME_TOTAL_CAPACITY_ENUM.get(
+            self.driver_config.warm_disk_type, constants.DME_SAS_TOTAL_CAP_KEY), 0))
+        cold_total_capacity = float(system_capacity.get(constants.DME_TOTAL_CAPACITY_ENUM.get(
+            self.driver_config.cold_disk_type, constants.DME_SATA_TOTAL_CAP_KEY), 0))
+        hot_used_capacity = float(system_capacity.get(constants.DME_USED_CAPACITY_ENUM.get(
+            self.driver_config.hot_disk_type, constants.DME_SSD_USED_CAP_KEY), 0))
+        warm_used_capacity = float(system_capacity.get(constants.DME_USED_CAPACITY_ENUM.get(
+            self.driver_config.warm_disk_type, constants.DME_SAS_USED_CAP_KEY), 0))
+        cold_used_capacity = float(system_capacity.get(constants.DME_USED_CAPACITY_ENUM.get(
+            self.driver_config.cold_disk_type, constants.DME_SATA_USED_CAP_KEY), 0))
+        tier_capacity = {
+            'hot_total_capacity_gb': round(driver_utils.capacity_unit_down_conversion(
+                hot_total_capacity, constants.BASE_VALUE, unit_power), 1),
+            'hot_free_capacity_gb': round(driver_utils.capacity_unit_down_conversion(
+                hot_total_capacity - hot_used_capacity,
+                constants.BASE_VALUE, unit_power), 2),
+            'warm_total_capacity_gb': round(driver_utils.capacity_unit_down_conversion(
+                warm_total_capacity, constants.BASE_VALUE, unit_power), 1),
+            'warm_free_capacity_gb': round(driver_utils.capacity_unit_down_conversion(
+                warm_total_capacity - warm_used_capacity,
+                constants.BASE_VALUE, unit_power), 2),
+            'cold_total_capacity_gb': round(driver_utils.capacity_unit_down_conversion(
+                cold_total_capacity, constants.BASE_VALUE, unit_power), 1),
+            'cold_free_capacity_gb': round(driver_utils.capacity_unit_down_conversion(
+                cold_total_capacity - cold_used_capacity,
+                constants.BASE_VALUE, unit_power), 2)
+        }
+        return tier_capacity

@@ -35,40 +35,25 @@ class SuyanSingleCheckUpdateStorage(CommunityCheckUpdateStorage):
         return constants.PLUGIN_SUYAN_SINGLE_IMPL, None
 
     @staticmethod
-    def _combine_capacity_usage(all_share_usages, metrics_enum, data_infos):
-        if not data_infos or len(data_infos) == 1:
-            LOG.info("No data found, don't need to continue,"
-                     " data_info is %s", data_infos)
-            return all_share_usages
+    def _get_share_id_by_info_name(info_name):
+        if not info_name.startswith('share-'):
+            return ''
 
-        header_line_info = data_infos[0].strip().strip('\n').split(',')
-        header_line_enum = {}
-        for index, metrics in enumerate(header_line_info):
-            header_line_enum[index] = metrics
-        for data_info in data_infos[1:]:
-            data_list = data_info.strip().strip('\n').split(',')
-            if len(data_list) != len(header_line_info):
-                LOG.warning("Data：%s length can not match the header line:%s in file, skip",
-                            data_list, header_line_info)
-                continue
-            object_capacity = {}
-            for key, value in header_line_enum.items():
-                if metrics_enum.get(value) is None:
-                    continue
-
-                # covert to capacity metrics unit form KB TO BYTE
-                if value in constants.ALL_CAPACITY_METRIC_NUM:
-                    object_capacity[metrics_enum.get(value)] = driver_utils.capacity_unit_up_conversion(
-                        int(data_list[key]), constants.BASE_VALUE, constants.POWER_BETWEEN_BYTE_AND_KB
-                    )
-                else:
-                    object_capacity[metrics_enum.get(value)] = data_list[key]
-            all_share_usages[object_capacity.get('name')] = object_capacity
-        return all_share_usages
+        return info_name.split('share-')[1]
 
     @staticmethod
-    def _check_and_set_tier_quota(namespace_info, all_share_usages):
+    def _set_all_share_usages(share_info, all_share_usages, share_id, units):
+        hard_limit = share_info.get('space_hard_quota', 0.0) * units
+        used_space = share_info.get('space_used', 0.0) * units
 
+        all_share_usages[share_id] = {
+            'used_space': str(int(used_space)),
+            'hard_limit': str(int(hard_limit)),
+            'avail_space': str(int(hard_limit - used_space))
+        }
+
+    @staticmethod
+    def _check_and_set_tier_quota(namespace_info, share_id, all_share_usages):
         tier_hot_cap_limit = namespace_info.get('tier_hot_cap_limit')
         tier_cold_cap_limit = namespace_info.get('tier_cold_cap_limit')
         if tier_hot_cap_limit is None and tier_cold_cap_limit is None:
@@ -82,14 +67,17 @@ class SuyanSingleCheckUpdateStorage(CommunityCheckUpdateStorage):
 
         ssd_space_used = tier_perf_cap.get('hot', {}).get(constants.USED)
         hdd_space_used = tier_perf_cap.get('cold', {}).get(constants.USED)
-        all_share_usages.get(namespace_info.get(constants.NAME)).update(
+        all_share_usages.get(share_id).update(
             {
-                'ssd_hard_quota': ssd_hard_quota,
-                'hdd_hard_quota': hdd_hard_quota,
-                'ssd_space_used': ssd_space_used,
-                'hdd_space_used': hdd_space_used
+                'ssd_hard_limit': str(int(ssd_hard_quota)),
+                'ssd_used_space': str(int(ssd_space_used)),
+                'ssd_avail_space': str(int(ssd_hard_quota - ssd_space_used)),
+                'hdd_hard_limit': str(int(hdd_hard_quota)),
+                'hdd_used_space': str(int(hdd_space_used)),
+                'hdd_avail_space': str(int(hdd_hard_quota - hdd_space_used))
             }
         )
+
         return all_share_usages
 
     def get_all_share_usage(self):
@@ -141,7 +129,7 @@ class SuyanSingleCheckUpdateStorage(CommunityCheckUpdateStorage):
         finally:
             self._remove_capacity_data_file(base_dir)
 
-        LOG.info("Successfully get all share usages")
+        LOG.debug("Successfully get all share usages, share_usages is %s", all_share_usages)
         return all_share_usages
 
     def _combine_all_share_usages(self, all_share_usages, namespace_data_infos, dtree_data_infos):
@@ -152,20 +140,18 @@ class SuyanSingleCheckUpdateStorage(CommunityCheckUpdateStorage):
         namespace_id,dtree_id,dtree_name,90065,90058,90059,90060,90061,90062,90063,90064
         """
         namespace_metrics_enmu = {
-            'namespace_name': 'name',
-            'namespace_id': 'id',
-            '90065': 'space_used',
-            '90064': 'ssd_space_used',
-            '90062': 'hdd_space_used',
-            '90061': 'ssd_hard_quota',
-            '90059': 'hdd_hard_quota',
-            '90058': 'space_hard_quota'
+            'name': 'namespace_name',
+            '90065': 'used_space',
+            '90064': 'ssd_used_space',
+            '90062': 'hdd_used_space',
+            '90061': 'ssd_hard_limit',
+            '90059': 'hdd_hard_limit',
+            '90058': 'hard_limit'
         }
         dtree_metrics_enum = {
-            'dtree_name': 'name',
-            'dtree_id': 'id',
-            '90065': 'space_used',
-            '90058': 'space_hard_quota'
+            'name': 'dtree_name',
+            '90065': 'used_space',
+            '90058': 'hard_limit'
         }
         # combine namespace capacity usage
         self._combine_capacity_usage(all_share_usages, namespace_metrics_enmu, namespace_data_infos)
@@ -181,25 +167,96 @@ class SuyanSingleCheckUpdateStorage(CommunityCheckUpdateStorage):
 
         all_share_usages = {}
         for namespace in all_namespace_info:
-            all_share_usages[namespace.get(constants.NAME)] = {
-                constants.ID: namespace.get(constants.ID),
-                constants.NAME: namespace.get(constants.NAME),
-                constants.SPACE_USED: driver_utils.capacity_unit_up_conversion(
-                    namespace.get(constants.SPACE_USED, 0), constants.BASE_VALUE, 1),
-                constants.SPACE_HARD_QUOTA: driver_utils.capacity_unit_up_conversion(
-                    namespace.get(constants.SPACE_HARD_QUOTA, 0), constants.BASE_VALUE, 1)
-            }
-            self._check_and_set_tier_quota(namespace, all_share_usages)
+            namespace_name = namespace.get('name')
+            namespace_share_id = self._get_share_id_by_info_name(namespace_name)
+            if not namespace_share_id:
+                LOG.debug("The namespace %s is not created from manila, don't need to return", namespace_name)
+                continue
+
+            self._set_all_share_usages(
+                namespace, all_share_usages, namespace_share_id, constants.BASE_VALUE
+            )
+            self._check_and_set_tier_quota(namespace, namespace_share_id, all_share_usages)
             all_dtree_info = self.client.get_all_dtree_info_of_namespace(
                 namespace.get(constants.ID))
             for dtree_info in all_dtree_info:
+                dtree_name = dtree_info.get('name')
+                dtree_share_id = self._get_share_id_by_info_name(dtree_name)
+                if not dtree_share_id:
+                    LOG.debug("The dtree %s is not created from manila, don't need to return", dtree_name)
+                    continue
+
                 dtree_quota = self.client.query_quota_by_parent(
                     dtree_info.get(constants.ID), constants.QUOTA_PARENT_TYPE_DTREE)
-                all_share_usages[dtree_info.get(constants.NAME)] = {
-                    constants.ID: dtree_info.get(constants.ID),
-                    constants.NAME: dtree_info.get(constants.NAME),
-                    constants.SPACE_USED: dtree_quota.get(constants.SPACE_USED, 0.0),
-                    constants.SPACE_HARD_QUOTA: dtree_quota.get(constants.SPACE_HARD_QUOTA, 0.0)
-                }
-        LOG.info("Successfully get all share usages")
+                self._set_all_share_usages(dtree_quota, all_share_usages, dtree_share_id, 1)
+        LOG.debug("Successfully get all share usages, share_usages is %s", all_share_usages)
+        return all_share_usages
+
+    def _combine_capacity_usage(self, all_share_usages, metrics_enum, data_infos):
+        if not data_infos or len(data_infos) == 1:
+            LOG.info("No data found, don't need to continue,"
+                     " data_info is %s", data_infos)
+            return all_share_usages
+
+        header_line_info = data_infos[0].strip().strip('\n').split(',')
+        header_line_enum = {}
+        for index, metrics in enumerate(header_line_info):
+            header_line_enum[index] = metrics
+        for data_info in data_infos[1:]:
+            data_list = data_info.strip().strip('\n').split(',')
+            if len(data_list) != len(header_line_info):
+                LOG.warning("Data：%s length can not match the header line:%s in file, skip",
+                            data_list, header_line_info)
+                continue
+            self._combine_per_capacity_usage(header_line_enum, metrics_enum, data_list, all_share_usages)
+        return all_share_usages
+
+    def _combine_per_capacity_usage(self, header_line_enum, metrics_enum, data_list, all_share_usages):
+        object_capacity = {}
+        object_name_key = driver_utils.convert_value_to_key(header_line_enum, metrics_enum.get('name'))
+        if not object_name_key:
+            LOG.debug("There is no name_info in data_Info, data_info is %s", data_list)
+            return all_share_usages
+
+        object_name = data_list[object_name_key]
+        share_id = self._get_share_id_by_info_name(object_name)
+        if not share_id:
+            LOG.debug("The namespace or dtree:%s is not created from manila,"
+                      " don't need to return", object_name)
+            return all_share_usages
+        for key, value in header_line_enum.items():
+            if metrics_enum.get(value) is None:
+                continue
+
+            # covert to capacity metrics unit form KB TO BYTE
+            if value in constants.ALL_CAPACITY_METRIC_NUM:
+                object_capacity[metrics_enum.get(value)] = str(driver_utils.capacity_unit_up_conversion(
+                    int(data_list[key]), constants.BASE_VALUE, constants.POWER_BETWEEN_BYTE_AND_KB
+                ))
+
+        object_capacity['avail_space'] = str(
+            int(object_capacity.get('hard_limit', 0)) -
+            int(object_capacity.get('used_space', 0))
+        )
+        # check share is a tier share or not
+        hard_limit = int(object_capacity.get('hard_limit', 0))
+        ssd_hard_limit = int(object_capacity.get('ssd_hard_limit', 0))
+        hdd_hard_limit = int(object_capacity.get('hdd_hard_limit', 0))
+        if ssd_hard_limit + hdd_hard_limit > hard_limit:
+            LOG.debug('This share is not a tier share, Dont need to return tier capacity')
+            object_capacity.pop('ssd_hard_limit')
+            object_capacity.pop('hdd_hard_limit')
+            object_capacity.pop('ssd_used_space')
+            object_capacity.pop('hdd_used_space')
+            all_share_usages[share_id] = object_capacity
+        else:
+            object_capacity['ssd_avail_space'] = str(
+                    int(object_capacity.get('ssd_hard_limit', 0)) -
+                    int(object_capacity.get('ssd_used_space', 0))
+            )
+            object_capacity['hdd_avail_space'] = str(
+                    int(object_capacity.get('hdd_hard_limit', 0)) -
+                    int(object_capacity.get('hdd_used_space', 0))
+            )
+            all_share_usages[share_id] = object_capacity
         return all_share_usages
