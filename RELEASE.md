@@ -1,3 +1,16 @@
+# 2.6.3
+## Mappings between Cinder Driver and OpenStack versions
+
+| OpenStack |Mitaka|Newton|Ocata|Pike|Queens|Rocky|Stein|Train|Ussuri|Victoria|Wallaby|Xena|Yoga|Zed|Antelope|
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+|Cinder Driver|√|√|√|√|√|√|√|√|√|√|√|√|√|√|
+
+## Version mappings among Cinder Driver, Huawei storage, and OpenStack
+| OpenStack |Huawei Storage|
+|---|---|
+|Cinder Driver|FusionStorage Block 8.0.0/8.0.1|
+| |OceanStor Pacific 8.1.0/8.1.1/8.1.2/8.1.3/8.1.5|
+
 # 2.6.2
 ## Mappings between Cinder Driver and OpenStack versions
 
