@@ -3,7 +3,7 @@
 
 | OpenStack |Mitaka|Newton|Ocata|Pike|Queens|Rocky|Stein|Train|Ussuri|Victoria|Wallaby|Xena|Yoga|Zed|Antelope|
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-|Cinder Driver|√|√|√|√|√|√|√|√|√|√|√|√|√|√|
+|Cinder Driver|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|
 
 ## Version mappings among Cinder Driver, Huawei storage, and OpenStack
 | OpenStack |Huawei Storage|
