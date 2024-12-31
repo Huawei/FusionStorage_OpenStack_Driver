@@ -13,6 +13,7 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
+import math
 import os
 import random
 import zipfile
@@ -74,7 +75,7 @@ def get_retry_interval(retry_times):
     """
     if retry_times == 0:
         return 0
-    return random.choice(range(0, 2 ** retry_times))
+    return random.choice(range(1, 2 ** retry_times))
 
 
 def wait_for_condition(func, interval, timeout):
@@ -193,6 +194,14 @@ def check_zip_ref_legal(zip_ref, max_file_num, max_file_size):
             return False
 
     return True
+
+
+def qos_calc_formula(share_size, qos_coefficient):
+    qos_coefficient_list = qos_coefficient.split('-')
+    return math.ceil(min(
+        int(qos_coefficient_list[0]) + int(qos_coefficient_list[1]) * share_size,
+        int(qos_coefficient_list[2])
+    ))
 
 
 class MyThread(threading.Thread):

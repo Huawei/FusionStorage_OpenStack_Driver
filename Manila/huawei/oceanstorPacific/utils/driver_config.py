@@ -15,6 +15,7 @@
 #    under the License.
 
 import os
+import re
 
 from lxml import etree as ET
 from oslo_log import log
@@ -22,6 +23,7 @@ from oslo_log import log
 from manila import exception
 from manila.i18n import _
 from . import constants
+from . import cipher
 
 LOG = log.getLogger(__name__)
 
@@ -62,6 +64,85 @@ class DriverConfig(object):
         else:
             return True
 
+    @staticmethod
+    def _optimized_pools_type_structure(pools_type):
+        """
+        Set pools type from:
+        {
+            0: {resource_pool: 0, pool_type:[NFS_SSD], qos_coefficients: [0-120-25000]},
+            1: {
+                resource_pool: 1,
+                pool_type:[NFS_HDD, DPC_SSD],
+                qos_coefficients: [200-20-10000, 0-480-130000]
+            }
+         }
+         to:
+         {
+            0: {pool_qos_param:{NFS_SSD: 0-120-25000}},
+            1: {
+                pool_qos_param:{NFS_HDD: 200-20-10000, DPC_SSD: 0-480-130000}
+            }
+         }
+        :param pools_type: dict: pools_type before optimized structure
+        :return: dict: pools_type after optimized structure
+        """
+        optimized_pools_type = {}
+        for pool_id, pool_value in pools_type.items():
+            pool_type_list = pool_value.get('pool_type')
+            qos_coefficient_list = pool_value.get('qos_coefficients')
+            pool_qos_param = {}
+            for index, value in enumerate(pool_type_list):
+                pool_qos_param[value] = qos_coefficient_list[index]
+            optimized_pools_type[pool_id] = {'pool_qos_param': pool_qos_param}
+        return optimized_pools_type
+
+    @staticmethod
+    def _check_pool_type(pool_type, pool_type_list, pool_type_info):
+        """
+        Check pool_type configure is valid or not
+        """
+        if len(pool_type_list) > 2:
+            msg = ("The length of pool_type:'%s' cannot over 2," % pool_type_list)
+            LOG.error(msg)
+            raise exception.BadConfigurationException(msg)
+        if len(pool_type_list) == 2 and pool_type != constants.TIER_POOL_TYPE:
+            msg = ("Configuration pool_type:'%s' must be set to '%s' when"
+                   " pool_type length is 2" % (pool_type, constants.TIER_POOL_TYPE))
+            LOG.error(msg)
+            raise exception.BadConfigurationException(msg)
+        if len(pool_type_list) == 1 and pool_type not in constants.POOL_TYPE_LIST:
+            msg = ("Configuration pool_type:'%s' must in %s" %
+                   (pool_type, constants.POOL_TYPE_LIST))
+            LOG.error(msg)
+            raise exception.BadConfigurationException(msg)
+        pool_type_info['pool_type'] = pool_type_list
+
+    @staticmethod
+    def _check_qos_coefficients(qos_coefficients, pool_type_list, pool_type_info):
+        """
+        Check qos_coefficients configure is valid or not
+        """
+        qos_coefficient_list = qos_coefficients.split('&')
+        if len(qos_coefficient_list) != len(pool_type_list):
+            msg = ("Configuration qos_coefficients:%s length must equal to pool_type:%s" %
+                   (qos_coefficient_list, pool_type_list))
+            LOG.error(msg)
+            raise exception.BadConfigurationException(msg)
+        for qos_coefficient in qos_coefficient_list:
+            coefficient_list = qos_coefficient.split('-')
+            if len(coefficient_list) != 3:
+                msg = ("Every qos_coefficient of qos_coefficients:%s length must equal to 3" %
+                       qos_coefficients)
+                LOG.error(msg)
+                raise exception.BadConfigurationException(msg)
+            for coefficient in coefficient_list:
+                if not coefficient.isdigit():
+                    msg = ("Every coefficient of qos_coefficients:%s must be integer" %
+                           qos_coefficients)
+                    LOG.error(msg)
+                    raise exception.BadConfigurationException(msg)
+        pool_type_info['qos_coefficients'] = qos_coefficient_list
+
     def get_xml_info(self):
         """
         使用lxml模块解析huawei manila配置文件
@@ -81,7 +162,6 @@ class DriverConfig(object):
         if self.last_modify_time == file_time:
             return
 
-        self.last_modify_time = file_time
         xml_root = self.get_xml_info()
 
         attr_funcs = (
@@ -103,12 +183,15 @@ class DriverConfig(object):
             self._dpc_mount_options,
             self._nfs_mount_options,
             self._rollback_rate,
-            self._third_platform
+            self._third_platform,
+            self._share_backend_pools_type,
+            self._check_ssl_two_way_config_valid
         )
 
         for f in attr_funcs:
             f(xml_root)
 
+        self.last_modify_time = file_time
         return
 
     def _nas_rest_url(self, xml_root):
@@ -130,7 +213,7 @@ class DriverConfig(object):
     def _nas_password(self, xml_root):
         text = xml_root.findtext('Storage/UserPassword')
         self.check_config_exist(text, 'Storage/UserPassword')
-        setattr(self.config, 'user_password', text.strip())
+        setattr(self.config, 'user_password', cipher.decrypt_cipher(text.strip()))
 
     def _nas_product(self, xml_root):
         text = xml_root.findtext('Storage/Product')
@@ -302,3 +385,99 @@ class DriverConfig(object):
             setattr(self.config, 'platform', constants.PLATFORM_ZTE)
         else:
             setattr(self.config, 'platform', text.strip())
+
+    def _share_backend_pools_type(self, xml_root):
+        """
+        set pools_type attr for config object by share_backend_pools_type configuration
+        :param xml_root:
+        :return:
+        """
+        share_backend_pools_type = self.config.safe_get('pool_qos_params')
+        pools_type = {}
+
+        if share_backend_pools_type:
+            self._parse_and_check_pools_type(share_backend_pools_type, pools_type)
+            pools_type = self._optimized_pools_type_structure(pools_type)
+        setattr(self.config, 'pools_type', pools_type)
+
+    def _parse_and_check_pools_type(self, share_backend_pools_type, pools_type):
+        """
+        First parse every resource pool type info to a dict
+        Second check is configuration if valid or not
+        :param share_backend_pools_type: The configuration of all resource pools
+        :param pools_type: dict: the final parse value
+        """
+        pools_type_list = share_backend_pools_type.split('\n')
+        for pool_type_info in pools_type_list:
+            if not pool_type_info:
+                continue
+            attr_list = re.split('[{;}]', pool_type_info)
+            pool_type = {}
+            for attr in attr_list:
+                if not attr:
+                    continue
+
+                pair = attr.split(':', 1)
+                pool_type[pair[0]] = pair[1]
+            self._check_backend_pool_type(pool_type)
+            pools_type[pool_type.get('resource_pool')] = pool_type
+
+    def _check_backend_pool_type(self, pool_type_info):
+        """
+        Check one resource pool info is valid or not
+        :param pool_type_info:the configuration value of a resource pool type after parsing.
+        """
+        resource_pool = pool_type_info.get('resource_pool', '').strip()
+        pool_type = pool_type_info.get('pool_type', '').strip()
+        qos_coefficients = pool_type_info.get('qos_coefficients', '').strip()
+        # check positional param is configured or not
+        if not all((resource_pool, pool_type, qos_coefficients)):
+            msg = ("Configuration 'resource_pool','pool_type','qos_coefficients' must "
+                   "be set in share_backend_pools_type in every resource pool,"
+                   " pool type info is %s" % pool_type_info)
+            LOG.error(msg)
+            raise exception.BadConfigurationException(msg)
+
+
+        self._check_resource_pool(resource_pool, pool_type_info)
+        pool_type_list = pool_type.split('&')
+        self._check_pool_type(pool_type, pool_type_list, pool_type_info)
+        self._check_qos_coefficients(qos_coefficients, pool_type_list, pool_type_info)
+
+    def _check_resource_pool(self, resource_pool, pool_type_info):
+        """
+        Check resource_pool configure is valid or not
+        """
+        if self.config.product == constants.PRODUCT_PACIFIC:
+            if not resource_pool.isdigit():
+                err_msg = _("Configuration resource_pool:%s value must be int." % resource_pool)
+                LOG.error(err_msg)
+                raise exception.BadConfigurationException(reason=err_msg)
+            resource_pool = int(resource_pool)
+        pool_type_info['resource_pool'] = resource_pool
+        if resource_pool not in self.config.pool_list:
+            msg = ("Configuration resource_pool %s must in XML StoragePool Configuration %s" %
+                   (resource_pool, self.config.pool_list))
+            LOG.error(msg)
+            raise exception.BadConfigurationException(msg)
+
+    def _check_ssl_two_way_config_valid(self, xml_root):
+        """
+        Check whether the two-way authentication parameter is valid or configured.
+        """
+        if not self.config.safe_get('storage_ssl_two_way_auth'):
+            setattr(self.config, 'mutual_authentication', {})
+            return
+        self.check_config_exist(self.config.safe_get('storage_cert_filepath'),
+                                constants.CONF_STORAGE_CERT_FILEPATH)
+        self.check_config_exist(self.config.safe_get('storage_ca_filepath'),
+                                constants.CONF_STORAGE_CA_FILEPATH)
+        self.check_config_exist(self.config.safe_get('storage_key_filepath'),
+                                constants.CONF_STORAGE_KEY_FILEPATH)
+        mutual_authentication = {
+            "storage_ca_filepath": self.config.safe_get('storage_ca_filepath'),
+            "storage_key_filepath": self.config.safe_get('storage_key_filepath'),
+            "storage_cert_filepath": self.config.safe_get('storage_cert_filepath'),
+            "storage_ssl_two_way_auth": self.config.safe_get('storage_ssl_two_way_auth')
+        }
+        setattr(self.config, 'mutual_authentication', mutual_authentication)

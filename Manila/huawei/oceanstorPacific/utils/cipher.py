@@ -1,4 +1,3 @@
-# coding=utf-8
 # Copyright (c) 2024 Huawei Technologies Co., Ltd.
 # All Rights Reserved.
 #
@@ -14,40 +13,18 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from abc import abstractmethod
 
-from .base_plugin import BasePlugin
+def decrypt_cipher(text_info, is_need_decrypt=False):
+    """
+    This interface is used to decrypt sensitive information.
+    When text_info is a plaintext password, no decryption is required by default.
 
-
-class OperateShare(BasePlugin):
-    @abstractmethod
-    def create_share(self):
+    When cipher_text is set to text_info,  please set is_need_decrypt to True
+    and use your own decryption component to decrypt the ciphertext
+    """
+    if is_need_decrypt:
+        # Please modify this interface and use your own decryption
+        # component to decrypt the ciphertext.
         pass
 
-    @abstractmethod
-    def delete_share(self):
-        pass
-
-    @abstractmethod
-    def ensure_share(self):
-        pass
-
-    @abstractmethod
-    def change_share(self, new_size, action):
-        pass
-
-    @abstractmethod
-    def get_share_usage(self, share_usages):
-        pass
-
-    @abstractmethod
-    def update_qos(self, qos_specs):
-        pass
-
-    @abstractmethod
-    def parse_cmcc_qos_options(self):
-        pass
-
-    @abstractmethod
-    def show_qos(self):
-        pass
+    return text_info

@@ -88,6 +88,7 @@ def check_retry(self, func, kwargs):
     """
     for retry_time in range(self.retry_times):
         retry_interval = driver_utils.get_retry_interval(retry_time + 1)
+        LOG.debug("The retry interval time is %ss", retry_interval)
         result = do_retry(self, func, retry_interval, kwargs)
         if result:
             return result
@@ -145,7 +146,6 @@ def construct_result_info(self, res):
     """
     duration_time = res.elapsed.total_seconds()
     result_type = res.headers.get('Content-Type')
-    LOG.info(res.headers)
     if result_type == constants.CONTENT_TYPE_STREAM:
         result = {
             'data': res,
@@ -246,5 +246,13 @@ class RestClient(object):
         self._session.verify = False
         if ssl_verify:
             self._session.verify = self.driver_config.ssl_cert_path
+        mutual_authentication = self.driver_config.mutual_authentication
+        if mutual_authentication.get(constants.CONF_STORAGE_SSL_TWO_WAY_AUTH):
+            LOG.info("Begin two-way authentication certificate")
+            self._session.verify = mutual_authentication.get(constants.CONF_STORAGE_CA_FILEPATH)
+            self._session.cert = (
+                mutual_authentication.get(constants.CONF_STORAGE_CERT_FILEPATH),
+                mutual_authentication.get(constants.CONF_STORAGE_KEY_FILEPATH)
+            )
         self._session.mount(self.driver_config.rest_url.lower(),
                             HostNameIgnoringAdapter())

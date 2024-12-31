@@ -93,6 +93,7 @@ class CommunityCheckUpdateStorage(CheckUpdateStorage):
         """
         pool_key = 'pools'
         data[pool_key] = []
+
         for pool_id in self.driver_config.pool_list:
             pool_info = self.client.query_pool_info(pool_id)
             if not pool_info:
@@ -101,6 +102,7 @@ class CommunityCheckUpdateStorage(CheckUpdateStorage):
             data[pool_key].append(pool_capabilities)
 
         if data[pool_key]:
+            data['file_systems'] = data.get(pool_key)
             LOG.debug(_("Updated storage pools:{0} success".format(self.driver_config.pool_list)))
         else:
             err_msg = (_("Update storage pools{0} fail.".format(self.driver_config.pool_list)))
@@ -115,20 +117,22 @@ class CommunityCheckUpdateStorage(CheckUpdateStorage):
         """
         pool_capabilities = dict(
                     pool_name=pool_info.get('storagePoolName'),
+                    file_system=pool_info.get('storagePoolName'),
                     qos=True,
                     reserved_percentage=int(self.driver_config.reserved_percentage),
                     reserved_share_extend_percentage=int(self.driver_config.reserved_percentage),
                     max_over_subscription_ratio=float(self.driver_config.max_over_ratio),
                     ipv6_support=True,
-                    file_system=True,
                     pool_id=pool_id,
                     dedupe=False,
                     thin_provisioning=True,
                     compression=True,
                     storage_protocol='NFS',
-                    snapshot_support=True,
-                    create_share_from_snapshot_support=False,
-                    revert_to_snapshot_support=True
+                    # These parameters can be set to True or False in share-type
+                    # based on community specifications.
+                    snapshot_support=[True, False],
+                    create_share_from_snapshot_support=[False, False],
+                    revert_to_snapshot_support=[True, False]
                 )
         # 上报存储池容量信息
         pool_capabilities.update(self._set_storage_pool_capacity(pool_info))

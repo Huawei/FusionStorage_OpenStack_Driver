@@ -15,12 +15,14 @@
 #    under the License.
 import json
 
+import six
 from oslo_log import log
-
+from oslo_utils import strutils
+import requests
 from manila import exception
 from manila.i18n import _
 
-from .rest_client import RestClient
+from .rest_client import RestClient, HostNameIgnoringAdapter
 from ..utils import constants
 
 LOG = log.getLogger(__name__)
@@ -96,8 +98,15 @@ class PacificClient(RestClient):
         res = self._session.post(
             self.login_url, data=json.dumps(data),
             timeout=constants.SOCKET_TIMEOUT,
-            verify=self._session.verify
+            verify=self._session.verify,
+            cert=self._session.cert
         )
+
+        try:
+            res.raise_for_status()
+        except requests.HTTPError as exc:
+            LOG.error("code: %s. description: %s", exc.response.status_code, six.text_type(exc))
+            raise exc
         result = res.json()
 
         if not result or (result.get('result', {}).get('code') != 0) or (
@@ -411,7 +420,7 @@ class PacificClient(RestClient):
     def update_qos_info(self, qos_param):
         url = "dros_service/converged_qos_policy"
         result = self.call(url, qos_param, "PUT")
-        self._assert_result(result, "Change qos for share failed.(qos_name: %s)".format(qos_param.get('name')))
+        self._assert_result(result, "Change qos for share failed, Qos name is %s" % qos_param.get('name'))
         LOG.info("Change qos for share success.(qos_name: %s)", qos_param.get('name'))
         return result
 
@@ -859,61 +868,13 @@ class PacificClient(RestClient):
             self._get_namespace_info, [account_id])
         return totals
 
-    def query_qos_info_by_name(self, qos_name):
+    def query_qos_info(self, query_param):
         """Get qos information through qos name"""
 
         url = 'dros_service/converged_qos_policy'
-        query_para = {
-            "qos_scale": constants.QOS_SCALE_NAMESPACE,
-            "name": qos_name
-        }
-        result = self.call(url, query_para, "GET")
-        self._assert_result(result, 'Query qos info by qos_name error.')
+        result = self.call(url, query_param, "GET")
+        self._assert_result(result, 'Query qos info error.')
         return result
-
-    def create_qos_for_suyan(self, qos_name, account_id, qos_config):
-        """Used to create a converged QoS policy for suyan."""
-
-        url = "dros_service/converged_qos_policy"
-        qos_para = {
-            'name': qos_name,
-            'qos_mode': constants.QOS_MODE_MANUAL,
-            'qos_scale': constants.QOS_SCALE_NAMESPACE,
-            'account_id': account_id,
-            'max_mbps': qos_config['max_band_width'],
-            'max_iops': qos_config['max_iops'],
-        }
-        result = self.call(url, qos_para, "POST")
-
-        if result.get('result', {}).get('code') == 0 and result.get('data'):
-            LOG.info(_("Create qos for suyan success.(qos_name: {0})".format(qos_name)))
-        else:
-            err_msg = _("Create qos for suyan failed.(qos_name: {0})".format(qos_name))
-            raise exception.InvalidShare(reason=err_msg)
-
-        return result.get('data')
-
-    def change_qos_for_suyan(self, qos_name, account_id, qos_config):
-        """Modify qos parameters"""
-
-        url = "dros_service/converged_qos_policy"
-        qos_para = {
-            'name': qos_name,
-            'qos_mode': constants.QOS_MODE_MANUAL,
-            'qos_scale': constants.QOS_SCALE_NAMESPACE,
-            'account_id': account_id,
-            'max_mbps': qos_config['max_band_width'],
-            'max_iops': qos_config['max_iops'],
-        }
-        result = self.call(url, qos_para, "PUT")
-
-        if result.get('result', {}).get('code') == 0:
-            LOG.info(_("Change qos for suyan success.(qos_name: {0})".format(qos_name)))
-        else:
-            err_msg = _("Change qos for suyan failed.(qos_name: {0})".format(qos_name))
-            raise exception.InvalidShare(reason=err_msg)
-
-        return
 
     def create_dtree(self, dtree_name, namespace_name):
         """create dtree by namespace name"""

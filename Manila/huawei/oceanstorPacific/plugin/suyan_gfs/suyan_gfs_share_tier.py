@@ -13,6 +13,7 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
+import math
 
 from oslo_log import log
 
@@ -39,6 +40,21 @@ class SuyanGfsShareTier(ShareTier):
     def get_impl_type():
         return constants.PLUGIN_SUYAN_GFS_IMPL, None
 
+    @staticmethod
+    def _get_tier_migrate_period_atime(migrate_period_policy):
+        if len(migrate_period_policy) <= 0:
+            LOG.debug("migrate_policy not found, return tier migrate default atime")
+            return constants.TIER_MIGRATE_DEFAULT_ATIME
+        policy = migrate_period_policy[0]
+        atime = policy.get('atime_filter', {}).get('atime')
+        if not atime:
+            return constants.TIER_MIGRATE_DEFAULT_ATIME
+        atime_unit = policy.get(
+            'atime_filter', {}).get('atime_unit', constants.HTIME_UNIT)
+        if atime_unit == constants.HTIME_UNIT:
+            return math.ceil(float(atime) / constants.TIER_DAY_TO_HOUR)
+        return atime
+
     def initialize_share_tier(self, file_path, init_type):
         name_locator_info = self._combine_name_locator()
         name_locator = name_locator_info.get('once_migrate_policy_name_locator')
@@ -49,25 +65,29 @@ class SuyanGfsShareTier(ShareTier):
             # 存在分级策略报错
             err_msg = _("migrate_policy {0} already exists".format(name_locator))
             raise exception.InvalidShare(reason=err_msg)
+
+        create_param = {
+            'gfs_name_locator': name_locator_info.get('gfs_name_locator'),
+            'name': name_locator_info.get('once_migrate_policy_name'),
+            'migration_type': constants.DME_MIGRATE_ONCE
+        }
         # 不存在分级策略则启动一个
         if init_type == "Preheat":
             strategy = 'hot'
+            migrate_policy_info = self.client.get_gfs_tier_migration_policies({
+                'name_locator': name_locator_info.get('periodicity_migrate_policy_name_locator')
+            })
+            create_param.update({
+                'expiration_to_cold': self._get_tier_migrate_period_atime(migrate_policy_info)
+            })
         elif init_type == "Precool":
             strategy = 'cold'
         else:
             err_msg = _("unknown init_type {0}".format(init_type))
             raise exception.InvalidShare(reason=err_msg)
-
-        result = self.client.create_gfs_tier_migration_policy({
-            'gfs_name_locator': name_locator_info.get('gfs_name_locator'),
-            'name': name_locator_info.get('once_migrate_policy_name'),
-            'migration_type': constants.DME_MIGRATE_ONCE,
-            "tier_grade": strategy,
-            'file_name_filter': {
-                'filter': file_path,
-                'operator': 'contain'
-            }
-        })
+        create_param.update({'tier_grade': strategy})
+        self._set_tier_dtree_param(create_param, file_path)
+        result = self.client.create_gfs_tier_migration_policy(create_param)
         try:
             self.client.wait_task_until_complete(result.get('task_id'))
         except Exception as err:
@@ -301,3 +321,35 @@ class SuyanGfsShareTier(ShareTier):
             'periodicity_migrate_policy_name_locator': periodicity_migrate_policy_name_locator,
             'grade_policy_name_locator': grade_policy_name_locator
         }
+
+    def _set_tier_dtree_param(self, create_param, file_path):
+        """
+        check is file path include dtree dic,
+        if true, param add 'dtree_id'
+        :param create_param:
+        :param file_path:
+        :return:
+        """
+        path_name_key = 'path_name'
+        if file_path == constants.PATH_SEPARATOR:
+            create_param[path_name_key] = file_path
+            return create_param
+        if not file_path.startswith(constants.PATH_SEPARATOR):
+            file_path = constants.PATH_SEPARATOR + file_path
+        if not file_path.endswith(constants.PATH_SEPARATOR):
+            file_path += constants.PATH_SEPARATOR
+        path_name_list = file_path.split(constants.PATH_SEPARATOR)
+        dtree_name = path_name_list[1]
+        gfs_name_locator = create_param.get('gfs_name_locator')
+        dtree_name_locator = '@'.join([dtree_name, gfs_name_locator])
+        result = self.client.query_gfs_dtree_detail(dtree_name_locator)
+        if not result:
+            create_param[path_name_key] = file_path
+            return create_param
+        dtree_id = result.get('id')
+        path_name_list.pop(1)
+        create_param.update({
+            'dtree_id': dtree_id,
+            path_name_key: constants.PATH_SEPARATOR.join(path_name_list)
+        })
+        return create_param

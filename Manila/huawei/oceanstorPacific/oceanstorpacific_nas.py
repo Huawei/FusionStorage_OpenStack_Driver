@@ -31,9 +31,37 @@ from .plugin.plugin_factory import PluginFactory
 from .utils import constants
 
 huawei_opts = [
-    cfg.StrOpt('manila_huawei_conf_file',
-               default='/etc/manila/manila_huawei_conf.xml',
-               help='The configuration file for the Manila Huawei driver.')]
+    cfg.StrOpt(
+        'manila_huawei_conf_file',
+        default='/etc/manila/manila_huawei_conf.xml',
+        help='The configuration file for the Manila Huawei driver.'
+    ),
+    cfg.StrOpt(
+        'pool_qos_params',
+        default='',
+        help='Storage resource pool type and QoS coefficient'
+    ),
+    cfg.BoolOpt(
+        'storage_ssl_two_way_auth',
+        default=False,
+        help='Whether to use mutual authentication.'
+    ),
+    cfg.StrOpt(
+        'storage_ca_filepath',
+        default='',
+        help='CA certificate directory.'
+    ),
+    cfg.StrOpt(
+        'storage_cert_filepath',
+        default='',
+        help='Client certificate directory.'
+    ),
+    cfg.StrOpt(
+        'storage_key_filepath',
+        default='',
+        help='Client key directory.'
+    )
+]
 
 CONF = cfg.CONF
 CONF.register_opts(huawei_opts)
