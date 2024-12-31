@@ -76,32 +76,21 @@ class SuyanSingleOperateShare(CommunityOperateShare):
         苏研定制接口，根据传递的qos_specs，刷新share的qos信息，
         如果没有则创建对应qos, 此接口的share不是share_instance对象是share对象
         """
-        if not self.share.get('export_locations')[0]:
+
+        self._set_share_to_share_instance()
+        if (not self.share.get('export_locations') or not self.share.get(
+                'export_locations')[0].get('path')):
             err_msg = _("update share qos fail for invalid export location.")
             raise exception.InvalidShare(reason=err_msg)
 
         self._get_update_qos_config(qos_specs)
 
         self._get_account_id()
-        self._get_namespace_name_for_qos()
-
-        qos_name = self.namespace_name
-        qos_info = self.client.query_qos_info_by_name(qos_name)
-        if not qos_info.get("data"):
-            self._create_qos_when_update_qos(qos_name)
-        else:
-            self._update_qos(qos_name)
+        self._get_parent_name_from_export_locations()
+        self._operate_share_qos(self.namespace_name, self.qos_config)
 
     def get_share_usage(self, share_usages):
         """苏研定制接口，通过share_usages获取对应share的容量信息"""
-
-        if (not self.share.get('export_locations') or not self.share.get(
-                'export_locations')[0].get('path')):
-            err_msg = _("Get namespace_name fail for invalid export location.")
-            LOG.error(err_msg)
-            raise exception.InvalidShare(reason=err_msg)
-
-        self._get_parent_name_from_export_locations()
 
         return self._get_share_capacity(share_usages)
 
@@ -139,54 +128,28 @@ class SuyanSingleOperateShare(CommunityOperateShare):
         self._check_namespace_running_status(result)
         return self._get_ensure_share_location()
 
-    def _get_max_band_width_qos_config(self, extra_specs):
-        """
-        苏研单独的qos 参数设置与读取，其支持的参数如下：
-             “total_bytes_sec”：总吞吐量，单位Byte/s
-             “total_iops_sec”： 总IOPS，单位个/s
-        此处解析 max_band_width，从total_bytes_sec获取
-        临时方案先统一将qos设置为无限制
-        """
-        # the total_bytes_sec is Byte/s the pacific need MB/s
-        self.qos_config['max_band_width'] = constants.QOS_UNLIMITED
-
-    def _get_max_iops_qos_config(self, extra_specs):
-        """
-        苏研单独的qos 参数设置与读取，其支持的参数如下：
-             “total_bytes_sec”：总吞吐量，单位Byte/s
-             “total_iops_sec”： 总IOPS，单位个/s
-        此处解析 max_iops，从total_iops_sec获取
-        临时方案先统一将qos设置为无限制
-        """
-        self.qos_config['max_iops'] = constants.QOS_UNLIMITED
-
-    def _create_qos(self):
-        qos_name = self.namespace_name
+    def show_qos(self):
         try:
-            result = self.client.create_qos_for_suyan(qos_name, self.account_id, self.qos_config)
-            qos_policy_id = result.get('id')
-            self.client.add_qos_association(self.namespace_name, qos_policy_id, self.account_id)
-        except Exception as e:
-            self._rollback_creat(2)
-            raise e
+            self._set_share_to_share_instance()
+        except Exception as err:
+            LOG.warning("Show qos info failed,return {}, reason is %s", err)
+            return {}
+
+        export_locations = self.share.get('export_locations')
+        if not export_locations or not export_locations[0].get('path'):
+            LOG.warning("Show qos info failed for invalid export location, return {}"
+                        "share export_locations is %s", export_locations)
+            return {}
+
+        self._get_account_id()
+        self._get_parent_name_from_export_locations()
+        return self._get_qos_param_of_namespace()
 
     def _get_parent_name_from_export_locations(self):
         """二级目录场景下获取namespace名称的方式有差异"""
 
         export_location = self.share.get('export_locations')[0].get('path')
         self._get_namespace_name_from_location(export_location)
-
-    def _create_qos_when_update_qos(self, qos_name):
-        try:
-            result = self.client.create_qos_for_suyan(qos_name, self.account_id, self.qos_config)
-            qos_policy_id = result.get('id')
-            self.client.add_qos_association(self.namespace_name, qos_policy_id, self.account_id)
-        except Exception as e:
-            self.client.delete_qos(self.namespace_name)
-            raise e
-
-    def _update_qos(self, qos_name):
-        self.client.change_qos_for_suyan(qos_name, self.account_id, self.qos_config)
 
     def _get_share_parent_info(self):
         """首先去存储查询父目录的命名空间信息，查询不到抛错"""
@@ -311,24 +274,19 @@ class SuyanSingleOperateShare(CommunityOperateShare):
         return False
 
     def _get_share_capacity(self, share_usages):
-        if self.share_parent_id:
-            share_info = share_usages.get(self.dtree_name)
-        else:
-            share_info = share_usages.get(self.namespace_name)
+        if not self.share.get('share_id'):
+            err_msg = _("There is no share_id attribution in share object:%s") % self.share
+            LOG.error(err_msg)
+            raise exception.InvalidShare(reason=err_msg)
 
-        if not share_info:
+        share_usage = share_usages.get(self.share.get('share_id'), {})
+        if not share_usage:
             LOG.info("Can not find share in share_usages. Try to get share capacity from storage")
             return self._get_share_capacity_from_storage()
 
-        return self._check_and_get_share_capacity(share_info)
-
-    def _get_namespace_name_for_qos(self):
-        """
-        the share param of update_qos and parse_cmcc_qos_options
-        is different from other interface
-        """
-        export_location = self.share.get('export_locations')[0]
-        self._get_namespace_name_from_location(export_location)
+        LOG.info("Get share usage:%s of share:%s from share_usages successfully",
+                 share_usage, self.share.get('share_id'))
+        return share_usage
 
     def _get_namespace_name_from_location(self, export_location):
         """
@@ -363,12 +321,20 @@ class SuyanSingleOperateShare(CommunityOperateShare):
             raise exception.InvalidInput(reason=err_msg)
 
     def _get_share_capacity_from_storage(self):
+        if (not self.share.get('export_locations') or not self.share.get(
+                'export_locations')[0].get('path')):
+            LOG.error("Get namespace_name fail for invalid export location:%s.",
+                      self.share.get('export_locations'))
+            return {}
+
+        self._get_parent_name_from_export_locations()
+
         share_capacity = {}
         namespace_info = self.client.query_namespace_by_name(self.namespace_name)
         if not namespace_info:
             err_msg = "Can not found namespace of share from storage, namespace name is %s." % self.namespace_name
             LOG.error(err_msg)
-            raise exception.InvalidShare(reason=err_msg)
+            return share_capacity
 
         self.namespace_id = namespace_info.get('id')
         if not self.share_parent_id:
@@ -415,9 +381,9 @@ class SuyanSingleOperateShare(CommunityOperateShare):
     def _get_dtree_capacity(self, share_capacity):
         dtree_info = self.client.query_dtree_by_name(self.dtree_name, self.namespace_id)
         if not dtree_info:
-            err_msg = "Can not found dtree of share from storage, dtree name is %s." % self.namespace_name
+            err_msg = "Can not found dtree of share from storage, dtree name is %s." % self.dtree_name
             LOG.error(err_msg)
-            raise exception.InvalidShare(reason=err_msg)
+            return share_capacity
 
         for info in dtree_info:
             self.dtree_id = info.get('id')
@@ -434,3 +400,40 @@ class SuyanSingleOperateShare(CommunityOperateShare):
         LOG.info("Get share usage:%s of dtree share:%s from storage successfully",
                  share_capacity, self.dtree_name)
         return share_capacity
+
+    def _get_qos_param_of_namespace(self):
+        """
+        If cannot found qos policy of namespace on storage, return {},
+        otherwise, return the actual MBPS and IOPS of this namespace
+        :return: a dict of total_bytes_sec and total_iops_sec
+        """
+        qos_associate_param = {
+            "filter": "[{\"qos_scale\": \"%s\" ,\"object_name\": \"%s\",\"account_id\": \"%s\"}]" %
+                      (constants.QOS_SCALE_NAMESPACE, self.namespace_name, self.account_id)
+        }
+        qos_association_info = self.client.get_qos_association_info(
+            qos_associate_param)
+        if not qos_association_info:
+            LOG.warning("Can not find associate qos policy of namespace:%s,"
+                        "return {}", self.namespace_name)
+            return {}
+
+        try:
+            qos_info = self.client.query_qos_info({
+                "qos_scale": constants.QOS_SCALE_NAMESPACE,
+                "id": qos_association_info[0].get('qos_policy_id')
+            })
+            if not qos_info.get('data'):
+                LOG.warning("Can not find qos policy by qos_policy_id: %s,"
+                            "return {}", qos_association_info[0].get('qos_policy_id'))
+                return {}
+
+            qos_param = {
+                'total_bytes_sec': qos_info.get('data').get('max_mbps'),
+                'total_iops_sec': qos_info.get('data').get('max_iops')
+            }
+            LOG.info("Query share qos policy successfully, param info is %s", qos_param)
+            return qos_param
+        except Exception as err:
+            LOG.warning("Query qos info failed, return {}, reason is %s" % err)
+            return {}

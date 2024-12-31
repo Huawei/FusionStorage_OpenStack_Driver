@@ -40,6 +40,15 @@ class ZTEOperateShare(OperateShare):
     def get_impl_type():
         return constants.PLUGIN_COMMUNITY_IMPL, constants.PLUGIN_ZTE_PLATFORM_IMPL
 
+    @staticmethod
+    def _get_qos_key(qos_keys, qos_key_list):
+        def _check_key_in_key_list(qos_key):
+            return qos_key in qos_keys
+
+        for key in qos_key_list:
+            if _check_key_in_key_list(key):
+                return key
+
     def reload_qos(self, qos_vals):
         """
         ZTE Platform Customization
@@ -47,6 +56,8 @@ class ZTEOperateShare(OperateShare):
         :param qos_vals:qos param which need to be update
         :return:
         """
+        if self.share.get('instances') is not None:
+            self._set_share_to_share_instance()
         if (not self.share.get('export_locations') or not self.share.get(
                 'export_locations')[0].get('path')):
             err_msg = "Ensure share fail for invalid export location."
@@ -55,7 +66,7 @@ class ZTEOperateShare(OperateShare):
 
         self._check_and_get_namespace_info()
         self._parse_qos_params(qos_vals)
-        self._reload_share_qos()
+        self._operate_share_qos(self.namespace_name, self.qos_param)
         LOG.info("Reload qos of namespace:%s successfully", self.namespace_name)
 
     def _check_and_get_namespace_info(self):
@@ -92,14 +103,16 @@ class ZTEOperateShare(OperateShare):
     def _set_qos_param(self, qos_vals):
         """
         check qos param whether in valid qos param list
-        set qos maxIOPS and maxMBPS param by qos_vals:
-        if both maxIOPS and total_iops_sec is configured, the maxIOPS priority is greater than total_iops_sec
-        if both maxMBPS and total_bytes_sec is configured, the maxMBPS priority is greater than total_bytes_sec
+        set qos max_iops and max_mbps param by qos_vals:
+        if maxIOPS, total_ops_sec, total_iops_sec are all configured,
+        the priority is maxIOPS > total_ops_sec > total_iops_sec
+        if both maxMBPS and total_bytes_sec art configured,
+        the priority is maxMBPS > total_bytes_sec
         :param qos_vals: qos param need to be check and parse
         :return:
         """
-        iops_key = 'max_iops'
-        mbps_key = 'max_mbps'
+        qos_key_list = qos_vals.keys()
+        iops_key = self._get_qos_key(qos_key_list, ['maxIOPS', 'total_ops_sec', 'total_iops_sec'])
         for qos_key, qos_value in qos_vals.items():
             if qos_key not in constants.QOS_KEYS:
                 error_msg = ("The qos param:%s of qos_vals:%s is not valid, Only support "
@@ -107,17 +120,16 @@ class ZTEOperateShare(OperateShare):
                 LOG.error(error_msg)
                 raise exception.InvalidInput(error_msg)
 
-            if qos_key == "maxIOPS":
-                self.qos_param[iops_key] = int(math.ceil(qos_value))
-            elif qos_key == "total_iops_sec" and self.qos_param.get(iops_key) is None:
-                self.qos_param[iops_key] = int(math.ceil(qos_value))
+            if qos_key == iops_key:
+                self.qos_param[constants.MAX_IOPS] = int(math.ceil(float(qos_value)))
             elif qos_key == "maxMBPS":
-                self.qos_param[mbps_key] = int(math.ceil(qos_value))
-            elif qos_key == "total_bytes_sec" and self.qos_param.get(mbps_key) is None:
-                qos_value = int(qos_value)
-                self.qos_param[mbps_key] = int(math.ceil(driver_utils.capacity_unit_down_conversion(
+                self.qos_param[constants.MAX_MBPS] = int(math.ceil(float(qos_value)))
+            elif qos_key == "total_bytes_sec" and self.qos_param.get(constants.MAX_MBPS) is None:
+                self.qos_param[constants.MAX_MBPS] = int(
+                    math.ceil(driver_utils.capacity_unit_down_conversion(
                         float(qos_value), constants.BASE_VALUE,
-                        constants.POWER_BETWEEN_BYTE_AND_MB)))
+                        constants.POWER_BETWEEN_BYTE_AND_MB
+                    )))
 
     def _check_qos_mandatory_param(self, qos_vals):
         for qos_key in constants.QOS_MUST_SET:
@@ -126,40 +138,3 @@ class ZTEOperateShare(OperateShare):
                        'one of [maxMBPS, total_bytes_sec] must be set' % qos_vals)
                 LOG.error(msg)
                 raise exception.InvalidInput(reason=msg)
-
-    def _reload_share_qos(self):
-        """
-        reload share qos by qos_vals and the namespace of share's qos associate info
-        :return:
-        """
-        qos_associate_param = {
-            "filter": "[{\"qos_scale\": \"%s\" ,\"object_name\": \"%s\",\"account_id\": \"%s\"}]" %
-                      (constants.QOS_SCALE_NAMESPACE, self.namespace_name, self.account_id)
-        }
-        qos_param = {
-            'name': self.namespace_name,
-            'qos_mode': constants.QOS_MODE_MANUAL,
-            'qos_scale': constants.QOS_SCALE_NAMESPACE,
-            'account_id': self.account_id,
-            'max_mbps': self.qos_param.get('max_mbps'),
-            'max_iops': self.qos_param.get('max_iops'),
-        }
-        qos_association_info = self.client.get_qos_association_info(
-            qos_associate_param)
-        if not self.qos_param and not qos_association_info:
-            LOG.info("Qos param:%s not configured, the namespace of share not associate qos, "
-                     "do nothing", self.qos_param)
-        elif not self.qos_param and qos_association_info:
-            LOG.info("Qos param:%s not configured, the namespace of share associate qos, delete"
-                     "qos of namespace", self.qos_param)
-            self.client.delete_qos(self.namespace_name)
-        elif self.qos_param and not qos_association_info:
-            LOG.info("Qos param:%s is configured and the namespace did not associate qos,"
-                     "Create and associate qos to namespace:%s", self.qos_param, self.namespace_name)
-            result = self.client.create_qos(qos_param)
-            qos_policy_id = result.get('id')
-            self.client.add_qos_association(self.namespace_name, qos_policy_id, self.account_id)
-        else:
-            LOG.info("Qos param:%s is configured and the namespace has already associated qos,"
-                     "Update the qos info of namespace:%s", self.qos_param, self.namespace_name)
-            self.client.update_qos_info(qos_param)

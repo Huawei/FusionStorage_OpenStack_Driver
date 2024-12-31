@@ -13,7 +13,7 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-
+import json
 import math
 from oslo_log import log
 
@@ -43,7 +43,6 @@ class CommunityOperateShare(OperateShare):
         self.quota_id = None  # 配额ID
         self.tier_info = {}  # 分级策略信息
         self.qos_config = {}  # QOS策略信息
-        self.enable_qos = False  # 创建Qos开关
         self.enable_tier = False  # 创建分级策略开关
 
     @staticmethod
@@ -92,9 +91,7 @@ class CommunityOperateShare(OperateShare):
         self._get_or_create_account()
         self._create_namespace()
         self._create_quota()
-        if self.enable_qos:
-            self._get_qos_config()
-            self._create_qos()
+        self._create_qos()
         if self.enable_tier:
             self._check_and_create_tier_policy()
         self._create_share_protocol()
@@ -111,7 +108,7 @@ class CommunityOperateShare(OperateShare):
             LOG.warn(_("Delete share fail, cannot find namespace info of share"))
             return False
         self._delete_share_protocol()
-        self._delete_share_qos()
+        self._operate_share_qos(self.namespace_name, self.qos_config)
         self.client.delete_namespace(self.namespace_name)
         self._delete_account()
         return True
@@ -127,16 +124,37 @@ class CommunityOperateShare(OperateShare):
         return self._get_ensure_share_location()
 
     def change_share(self, new_size, action):
-
         if (not self.share.get('export_locations') or not self.share.get(
                 'export_locations')[0].get('path')):
             err_msg = _("Change share fail for invalid export location.")
             raise exception.InvalidShare(reason=err_msg)
 
         namespace_info = self._get_namespace_info()
-        self._check_and_update_tier_size(namespace_info, new_size)
+
+        self._get_account_id()
+
+        # set tier size param
+        self.tier_info = self._get_all_share_tier_policy()
+        self._set_tier_data_size(self.tier_info, new_size)
+
+        # set qos update param
+        self.qos_config = self._set_qos_param_by_size_and_type(
+            new_size, int(self.tier_info.get('hot_data_size', 0)),
+            int(self.tier_info.get('cold_data_size', 0)))
+
+        # set tier update param
+        update_param = self._check_and_get_tier_update_param(namespace_info, new_size, action)
         self._get_quota_info(namespace_info, action, self.namespace_id,
                              new_size, constants.QUOTA_PARENT_TYPE_NAMESPACE)
+
+        # update namespace qos policy
+        self._operate_share_qos(self.namespace_name, self.qos_config)
+
+        # update namespace tier size limit
+        if update_param:
+            self.client.change_namespace_info(update_param)
+
+        # update namespace quota
         self.client.change_quota_size(self.quota_id, new_size)
         LOG.info("{0} share done. New size:{1}.".format(action, new_size))
         return True
@@ -157,38 +175,23 @@ class CommunityOperateShare(OperateShare):
     def update_qos(self, qos_specs):
         pass
 
+    def show_qos(self):
+        pass
+
     def parse_cmcc_qos_options(self):
         """解冻前需要先获取要恢复的qos信息"""
-        share_qos_info = {
-            "total_bytes_sec": 0,
-            "total_iops_sec": 0
-        }
-        LOG.info("Get the qos value before qos-freeze, the value is %s", share_qos_info)
-        return share_qos_info
 
-    def _delete_share_qos(self):
-        """
-        Check whether the namespace is associated with a QoS. If no, end delete the qos.
-        Then check whether the QoS is associated with other shares. If no, delete the QoS.
-        """
-        qos_asso_param = {
-            "filter": "[{\"qos_scale\": \"%s\" ,\"object_name\": \"%s\",\"account_id\": \"%s\"}]" %
-                      (constants.QOS_SCALE_NAMESPACE, self.namespace_name, self.account_id)
+        self._set_share_to_share_instance()
+        self.tier_info = self._get_all_share_tier_policy()
+        self._set_tier_data_size(self.tier_info, self.share.get('size'))
+        qos_config = self._set_qos_param_by_size_and_type(
+            self.share.get('size'), int(self.tier_info.get('hot_data_size', 0)),
+            int(self.tier_info.get('cold_data_size', 0))
+        )
+        return {
+            "total_bytes_sec": int(qos_config.get('max_mbps', 0)),
+            "total_iops_sec": int(qos_config.get('max_iops', 0))
         }
-        qos_association_info = self.client.get_qos_association_info(qos_asso_param)
-
-        if not qos_association_info:
-            LOG.debug(_("Cannot find qos association info of share, no need to delete"))
-            return
-        qos_association_id = qos_association_info[0].get("qos_policy_id")
-        qos_asso_count_param = {
-            "filter": "[{\"qos_scale\": \"%s\" ,\"qos_policy_id\": \"%s\",\"account_id\": \"%s\"}]" %
-                      (constants.QOS_SCALE_NAMESPACE, qos_association_id, self.account_id)
-        }
-        result = self.client.get_qos_association_count_by_qos_id(qos_asso_count_param)
-        qos_association_count = result.get("count")
-        if qos_association_count == 1:
-            self.client.delete_qos(self.namespace_name)
 
     def _check_domain(self):
         """当共享协议类型存在Nfs或Cifs时，检查配置文件集群域名是否存在"""
@@ -199,65 +202,6 @@ class CommunityOperateShare(OperateShare):
             err_msg = _("Create namespace({0}) error, because can't "
                         "get the domain name of cluster...".format(self.share['id']))
             raise exception.InvalidInput(err_msg)
-
-    def _get_max_band_width_qos_config(self, extra_specs):
-        tmp_max_band_width = extra_specs.get('pacific:max_band_width')
-        if tmp_max_band_width is None:
-            self.qos_config['max_band_width'] = constants.MAX_BAND_WIDTH
-        elif tmp_max_band_width.strip().isdigit() \
-                and 1 <= int(tmp_max_band_width.strip()) <= constants.BAND_WIDTH_UPPER_LIMIT:
-            self.qos_config['max_band_width'] = int(tmp_max_band_width.strip())
-        else:
-            err_msg = _("The <pacific:max_band_width> in share type "
-                        "must be int([1, %s]).") % constants.BAND_WIDTH_UPPER_LIMIT
-            raise exception.InvalidInput(reason=err_msg)
-
-    def _get_max_iops_qos_config(self, extra_specs):
-        tmp_max_iops = extra_specs.get('pacific:max_iops')
-        if tmp_max_iops is None:
-            self.qos_config['max_iops'] = constants.MAX_IOPS
-        elif tmp_max_iops.strip().isdigit() \
-                and 0 <= int(tmp_max_iops.strip()) <= constants.MAX_IOPS_UPPER_LIMIT:
-            self.qos_config['max_iops'] = int(tmp_max_iops.strip())
-        else:
-            err_msg = _("The <pacific:max_iops> in share type "
-                        "must be int([0, %s]).") % constants.MAX_IOPS_UPPER_LIMIT
-            raise exception.InvalidInput(reason=err_msg)
-
-    def _get_basic_band_width_qos_config(self, extra_specs):
-        tmp_basic_band_width = extra_specs.get('pacific:basic_band_width')
-        if tmp_basic_band_width is None:
-            self.qos_config['basic_band_width'] = constants.BASIC_BAND_WIDTH
-        elif tmp_basic_band_width.strip().isdigit() \
-                and 1 <= int(tmp_basic_band_width.strip()) <= constants.BAND_WIDTH_UPPER_LIMIT:
-            self.qos_config['basic_band_width'] = int(tmp_basic_band_width.strip())
-        else:
-            err_msg = _("The <pacific:basic_band_width> in share type "
-                        "must be int([1, %s]).") % constants.BAND_WIDTH_UPPER_LIMIT
-            raise exception.InvalidInput(reason=err_msg)
-
-    def _get_bps_density_qos_config(self, extra_specs):
-        tmp_bps_density = extra_specs.get('pacific:bps_density')
-        if tmp_bps_density is None:
-            self.qos_config['bps_density'] = constants.BPS_DENSITY
-        elif tmp_bps_density.strip().isdigit() \
-                and 1 <= int(tmp_bps_density.strip()) <= constants.MAX_BPS_DENSITY:
-            self.qos_config['bps_density'] = int(tmp_bps_density.strip())
-        else:
-            err_msg = _("The <pacific:bps_density> in share type "
-                        "must be int([1, %s]).") % constants.MAX_BPS_DENSITY
-            raise exception.InvalidInput(reason=err_msg)
-
-    def _get_qos_config(self):
-        """从manila提供的share_types中获取qos策略信息"""
-
-        type_id = self.share.get('share_type_id')
-        extra_specs = share_types.get_share_type_extra_specs(type_id)
-
-        self._get_max_band_width_qos_config(extra_specs)
-        self._get_max_iops_qos_config(extra_specs)
-        self._get_basic_band_width_qos_config(extra_specs)
-        self._get_bps_density_qos_config(extra_specs)
 
     def _get_or_create_account(self):
         """
@@ -340,23 +284,12 @@ class CommunityOperateShare(OperateShare):
     def _create_qos(self):
         """创建qos策略并关联到对应的命名空间，qos名称和命名空间名称相同"""
 
-        qos_name = self.namespace_name
+        self.qos_config = self._set_qos_param_by_size_and_type(
+            self.share.get('size'), int(self.tier_info.get('hot_data_size', 0)),
+            int(self.tier_info.get('cold_data_size', 0))
+        )
         try:
-            LOG.info("Begin to create qos, qos name is %s",
-                     self.namespace_name)
-            qos_para = {
-                'name': qos_name,
-                'qos_mode': constants.QOS_MODE_PACKAGE,
-                'qos_scale': constants.QOS_SCALE_NAMESPACE,
-                'account_id': self.account_id,
-                'max_mbps': self.qos_config['max_band_width'],
-                'max_iops': self.qos_config['max_iops'],
-            }
-            result = self.client.create_qos(qos_para)
-            qos_policy_id = result.get('id')
-            LOG.info("Begin to associate qos to namespace, namespace name is %s",
-                     self.namespace_name)
-            self.client.add_qos_association(self.namespace_name, qos_policy_id, self.account_id)
+            self._operate_share_qos(self.namespace_name, self.qos_config)
         except Exception as e:
             self._rollback_creat(2)
             raise e
@@ -397,35 +330,35 @@ class CommunityOperateShare(OperateShare):
             self._rollback_creat(5)
             raise e
 
-    def _check_and_update_tier_size(self, namespace_info, new_size):
+    def _check_and_get_tier_update_param(self, namespace_info, new_size, action):
         """
         check is need to update hot tier size
         :param namespace_info: current namespace info
         :param new_size: final total capacity of namesapce
         :return: None
         """
-        self.tier_info = self._get_all_share_tier_policy()
-        self._set_tier_data_size(self.tier_info, new_size)
         # check tier capacity param is valid or not
         self._check_share_tier_capacity_param(self.tier_info, new_size)
         current_hot_data_size = namespace_info.get('tier_hot_cap_limit', 0)
+        current_cold_data_size = namespace_info.get('tier_cold_cap_limit', 0)
         new_hot_data_size = self.tier_info.get('hot_data_size')
 
         if new_hot_data_size is None:
-            return
+            return {}
 
         new_cold_data_size = driver_utils.capacity_unit_up_conversion(
             new_size - int(new_hot_data_size), constants.BASE_VALUE, 2)
         new_hot_data_size = driver_utils.capacity_unit_up_conversion(
             int(new_hot_data_size), constants.BASE_VALUE, 2)
-        total_increase_capacity = driver_utils.capacity_unit_up_conversion(
-            new_size - self.share.get('size'), constants.BASE_VALUE, 2)
-        hot_increase_capacity = new_hot_data_size - current_hot_data_size
+        total_change_capacity = driver_utils.capacity_unit_up_conversion(
+            abs(new_size - self.share.get('size')), constants.BASE_VALUE, 2)
+        hot_change_capacity = abs(new_hot_data_size - current_hot_data_size)
+        cold_change_capacity = abs(new_cold_data_size - current_cold_data_size)
 
-        if hot_increase_capacity > total_increase_capacity:
-            err_msg = (_("Extend hot data size failed, hot_increase_capacity %sKB can "
-                         "not bigger than total_increase_capacity %sKB") %
-                       (hot_increase_capacity, total_increase_capacity))
+        if hot_change_capacity > total_change_capacity or cold_change_capacity > total_change_capacity:
+            err_msg = (("change tier data size failed, hot_change_capacity %sKB or "
+                       "cold_change_capacity %sKB can not bigger than total_change_capacity %sKB") %
+                       (hot_change_capacity, cold_change_capacity, total_change_capacity))
             LOG.error(err_msg)
             raise exception.InvalidInput(reason=err_msg)
 
@@ -434,7 +367,22 @@ class CommunityOperateShare(OperateShare):
             'tier_hot_cap_limit': new_hot_data_size,
             'tier_cold_cap_limit': new_cold_data_size
         }
-        self.client.change_namespace_info(update_param)
+        if action != 'shrink':
+            return update_param
+
+        # total size can not smaller than used size
+        tier_perf_cap = json.loads(namespace_info.get('tier_perf_cap', '{}'))
+        hot_size_used = tier_perf_cap.get('hot', {}).get(constants.USED)
+        cold_size_used = tier_perf_cap.get('cold', {}).get(constants.USED)
+        if new_hot_data_size < hot_size_used or new_cold_data_size < cold_size_used:
+            error_msg = (('Shrink share failed for tier used size  exceed tier total size,'
+                         'new_hot_data_size is %s, hot_size_used is %s, '
+                         'new_cold_data_size is %s, cold_size_used is %s') %
+                         (new_hot_data_size, hot_size_used, new_cold_data_size, cold_size_used))
+            LOG.error(error_msg)
+            raise exception.InvalidInput(error_msg)
+
+        return update_param
 
     def _rollback_creat(self, level):
 
@@ -548,7 +496,8 @@ class CommunityOperateShare(OperateShare):
 
         action = action.title()
         if (action == 'Shrink') and (cur_size > new_size):
-            err_msg = (_("Shrink share fail for space used({0}G) > new sizre({1}G)".format(cur_size, new_size)))
+            err_msg = "Shrink share fail for space used({0}G) > new sizre({1}G)".format(cur_size, new_size)
+            LOG.error(err_msg)
             raise exception.InvalidInput(reason=err_msg)
 
     def _check_and_get_tier_param(self):
@@ -667,11 +616,7 @@ class CommunityOperateShare(OperateShare):
             LOG.error(err_msg)
             raise exception.InvalidShare(reason=err_msg)
 
-        self.qos_config['max_band_width'] = int(math.ceil(
-            driver_utils.capacity_unit_down_conversion(
-                float(tmp_max_band_width), constants.BASE_VALUE,
-                constants.POWER_BETWEEN_BYTE_AND_MB)
-        ))
+        self.qos_config['max_mbps'] = int(tmp_max_band_width)
         self.qos_config['max_iops'] = int(tmp_max_iops)
 
     def _get_namespace_storage_pool_name(self, namespace_info):
