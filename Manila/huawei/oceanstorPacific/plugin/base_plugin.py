@@ -241,6 +241,16 @@ class BasePlugin(object):
         for qos_coefficient in pool_qos_param.values():
             return driver_utils.qos_calc_formula(share_size_to_tib, qos_coefficient)
 
+    @staticmethod
+    def _get_acl_type_by_share_type(acl_policy_config):
+        acl_policy = acl_policy_config.split(' ')[1]
+        if not acl_policy.isdigit() or not int(acl_policy) in constants.ACL_POLICY:
+            error_msg = "Acl policy must be integer and must be in %s" % constants.ACL_POLICY
+            LOG.error(error_msg)
+            raise exception.BadConfigurationException(error_msg)
+
+        return int(acl_policy)
+
     def concurrent_exec_waiting_tasks(self, task_id_list):
         # Enable Concurrent Tasks and wait until all tasks complete
         threading_task_list = []
@@ -464,3 +474,20 @@ class BasePlugin(object):
             err_msg = "Can not get share instance of share:%s" % self.share.get('id')
             LOG.error(err_msg)
             raise exception.InvalidShare(reason=err_msg)
+
+    def _set_acl_type_policy(self):
+        """
+        set namespace acl_policy by share_proto and share_type
+        :return:
+        """
+        acl_policy_config = self.share_type_extra_specs.get('acl_policy')
+        if acl_policy_config is not None:
+            return self._get_acl_type_by_share_type(acl_policy_config)
+
+        if 'CIFS' not in self.share_proto:
+            return constants.ACL_POLICY_UNIX
+
+        elif len(self.share_proto) == 1:
+            return constants.ACL_POLICY_NTFS
+
+        return constants.ACL_POLICY_MIXED

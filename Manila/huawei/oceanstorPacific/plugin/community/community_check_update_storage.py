@@ -127,12 +127,13 @@ class CommunityCheckUpdateStorage(CheckUpdateStorage):
                     dedupe=False,
                     thin_provisioning=True,
                     compression=True,
-                    storage_protocol='NFS',
                     # These parameters can be set to True or False in share-type
                     # based on community specifications.
                     snapshot_support=[True, False],
                     create_share_from_snapshot_support=[False, False],
-                    revert_to_snapshot_support=[True, False]
+                    revert_to_snapshot_support=[True, False],
+                    # ACL Policy capability for CIFS share
+                    acl_policy=constants.ACL_POLICY,
                 )
         # 上报存储池容量信息
         pool_capabilities.update(self._set_storage_pool_capacity(pool_info))
