@@ -14,15 +14,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 import json
-
 import six
 from oslo_log import log
-from oslo_utils import strutils
 import requests
 from manila import exception
 from manila.i18n import _
 
-from .rest_client import RestClient, HostNameIgnoringAdapter
+from .rest_client import RestClient
 from ..utils import constants
 
 LOG = log.getLogger(__name__)

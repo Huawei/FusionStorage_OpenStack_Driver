@@ -18,23 +18,106 @@ import functools
 import json
 import threading
 import time
+import ssl
+try:
+    import OpenSSL
+except ImportError:
+    pass
 
 from oslo_concurrency import lockutils
 from oslo_log import log
 from oslo_utils import strutils
 import requests
 from requests.adapters import HTTPAdapter
+import urllib3.contrib.pyopenssl as pyopenssl
+from urllib3.util import ssl_
 
-from ..utils import constants, driver_utils
+from ..utils import constants, driver_utils, cipher
 
 LOG = log.getLogger(__name__)
 
 
-class HostNameIgnoringAdapter(HTTPAdapter):
+class SafeIgnoringAdapter(HTTPAdapter):
+    def __init__(self, verify, mutual_authentication):
+        self.mutual_authentication = mutual_authentication
+        self.verify = verify
+        self.ctx = None
+        self.verify_number = 0
+        super(SafeIgnoringAdapter, self).__init__()
+
     def cert_verify(self, conn, url, verify, cert):
         conn.assert_hostname = False
-        return super(HostNameIgnoringAdapter, self).cert_verify(
+        return super(SafeIgnoringAdapter, self).cert_verify(
             conn, url, verify, cert)
+
+    def init_poolmanager(self, *pool_args, **pool_kwargs):
+        if not self.verify:
+            super(SafeIgnoringAdapter, self).init_poolmanager(*pool_args, **pool_kwargs)
+        elif self._is_using_pyopenssl():
+            self.ctx = pyopenssl.PyOpenSSLContext(ssl.PROTOCOL_TLSv1_2)
+            self.ctx._ctx.get_cert_store().set_flags(OpenSSL.crypto.X509StoreFlags().CRL_CHECK)
+            self.ctx.set_ciphers('ECDHE-RSA-AES256-GCM-SHA384')
+            pool_kwargs['ssl_context'] = self.ctx
+        else:
+            self.ctx = ssl_.create_urllib3_context(ssl_version=ssl.PROTOCOL_TLSv1_2,
+                                                   ciphers='ECDHE-RSA-AES256-GCM-SHA384')
+            self.ctx.verify_mode = ssl.CERT_REQUIRED
+            self.ctx.load_verify_locations(self.verify)
+            cert_stats = self.ctx.cert_store_stats()
+            if cert_stats.get('crl', 0) > 0:
+                self.ctx.verify_flags = ssl.VERIFY_CRL_CHECK_CHAIN
+        if self.mutual_authentication.get(constants.CONF_STORAGE_SSL_TWO_WAY_AUTH):
+            LOG.info("Begin two-way authentication certificate")
+            self.check_two_way_certified()
+        pool_kwargs['ssl_context'] = self.ctx
+        super(SafeIgnoringAdapter, self).init_poolmanager(*pool_args, **pool_kwargs)
+
+    def check_two_way_certified(self):
+        cert_filepath = self.mutual_authentication.get(constants.CONF_STORAGE_CERT_FILEPATH)
+        key_filepath = self.mutual_authentication.get(constants.CONF_STORAGE_KEY_FILEPATH)
+        key_password = self.mutual_authentication.get(constants.CONF_STORAGE_KEY_PWD)
+        if self.mutual_authentication.get(constants.CONF_STORAGE_KEY_PWD):
+            self.ctx.load_cert_chain(certfile=cert_filepath,
+                                     keyfile=key_filepath,
+                                     password=cipher.decrypt_cipher(key_password))
+        else:
+            self.ctx.load_cert_chain(certfile=cert_filepath,
+                                     keyfile=key_filepath)
+
+    def proxy_manager_for(self, proxy, **proxy_kwargs):
+        """Customize ssl_context to implement CRL verification when use https proxy"""
+
+        proxy_kwargs['ssl_context'] = self.ctx
+        manager = super(SafeIgnoringAdapter, self).proxy_manager_for(proxy, **proxy_kwargs)
+
+        return manager
+
+    def _verify_callback(self, cnx, x509, err_no, err_depth, return_code):
+        """
+        Rewrite the OpenSSL callback function to
+        ignore the following two error scenarios:
+        err_no == 0: certificate verify successfully.
+        err_no == 3 : The CRL of a certificate could not be found.
+        err_no == 10 : The certificate has expired:
+                       that is the not after date is before the current time.
+        """
+        LOG.info("verification error code is %s.", err_no)
+        self.verify_number = err_no
+        err_number_ok = [0, 3, 10]
+        if err_no == 10:
+            LOG.warning("The certificate has expired: "
+                        "that is the not after date is before the current time.")
+        return err_no in err_number_ok
+
+    def _is_using_pyopenssl(self):
+        if hasattr(OpenSSL.crypto, "X509StoreFlags"):
+            pyopenssl.inject_into_urllib3()
+            self._inject_verify_callback()
+            return True
+        return False
+
+    def _inject_verify_callback(self):
+        pyopenssl._verify_callback = self._verify_callback
 
 
 def rest_operation_wrapper(func):
@@ -171,6 +254,7 @@ class RestClient(object):
         self.call_lock = lockutils.ReaderWriterLock()
         self._session = None
         self.is_online = False
+        self.adapter = None
 
     def retry_relogin(self, old_token):
         raise NotImplementedError
@@ -247,12 +331,7 @@ class RestClient(object):
         if ssl_verify:
             self._session.verify = self.driver_config.ssl_cert_path
         mutual_authentication = self.driver_config.mutual_authentication
-        if mutual_authentication.get(constants.CONF_STORAGE_SSL_TWO_WAY_AUTH):
-            LOG.info("Begin two-way authentication certificate")
+        if mutual_authentication.get(constants.CONF_STORAGE_CA_FILEPATH):
             self._session.verify = mutual_authentication.get(constants.CONF_STORAGE_CA_FILEPATH)
-            self._session.cert = (
-                mutual_authentication.get(constants.CONF_STORAGE_CERT_FILEPATH),
-                mutual_authentication.get(constants.CONF_STORAGE_KEY_FILEPATH)
-            )
-        self._session.mount(self.driver_config.rest_url.lower(),
-                            HostNameIgnoringAdapter())
+        self.adapter = SafeIgnoringAdapter(self._session.verify, mutual_authentication)
+        self._session.mount(self.driver_config.rest_url.lower(), self.adapter)

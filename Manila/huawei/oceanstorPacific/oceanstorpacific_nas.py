@@ -60,6 +60,11 @@ huawei_opts = [
         'storage_key_filepath',
         default='',
         help='Client key directory.'
+    ),
+    cfg.StrOpt(
+        'storage_key_pwd',
+        default='',
+        help='Client key password.'
     )
 ]
 
@@ -70,6 +75,7 @@ LOG = log.getLogger(__name__)
 
 class HuaweiNasDriver(driver.ShareDriver):
     """Huawei Oceanstor Pacific Share Driver."""
+    VERSION = "2.7.4"
 
     def __init__(self, *args, **kwargs):
         """Do initialization."""
@@ -217,7 +223,7 @@ class HuaweiNasDriver(driver.ShareDriver):
         data = dict(
             share_backend_name=backend_name or 'OceanStorPacific_NFS_CIFS',
             vendor_name='Huawei',
-            driver_version='2.7.2',
+            driver_version=self.VERSION,
             storage_protocol='NFS_CIFS',
             driver_handles_share_servers=False,
             qos=True,

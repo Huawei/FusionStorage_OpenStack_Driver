@@ -99,7 +99,6 @@ class SuyanSingleCheckUpdateStorage(CommunityCheckUpdateStorage):
         pool_capabilities.update({
             'storage_protocol': 'NFS_CIFS_DPC',
             'share_proto': 'DPC',
-            'driver_version': 1.1,
             'snapshot_support': [False, False],
             'revert_to_snapshot_support': [False, False]
         })

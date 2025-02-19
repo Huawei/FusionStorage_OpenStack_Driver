@@ -20,7 +20,6 @@ from oslo_log import log
 from manila import exception
 from manila.i18n import _
 from manila.share import api
-from manila.share import share_types
 
 from ..operate_share import OperateShare
 from ...utils import constants, driver_utils
@@ -225,7 +224,8 @@ class CommunityOperateShare(OperateShare):
             'storage_pool_id': self.storage_pool_id,
             'account_id': self.account_id,
             'atime_update_mode': constants.ATIME_UPDATE_HOURS,
-            'case_sensitive': constants.CASE_INSENSITIVE
+            'case_sensitive': constants.CASE_INSENSITIVE,
+            'acl_policy_type': self._set_acl_type_policy()
         }
         self.tier_info = self._get_all_share_tier_policy()
         self._set_tier_data_size(self.tier_info, self.share.get('size'))

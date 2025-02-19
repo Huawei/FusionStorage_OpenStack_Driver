@@ -143,6 +143,17 @@ class DriverConfig(object):
                     raise exception.BadConfigurationException(msg)
         pool_type_info['qos_coefficients'] = qos_coefficient_list
 
+    @staticmethod
+    def _parser_ssl_value(ssl_value):
+        if ssl_value is None:
+            return False
+        if str(ssl_value).strip().lower() in ('true', 'false'):
+            return str(ssl_value).strip().lower() == 'true'
+        else:
+            msg = _("SSLCertVerify configured error, Please set this parameter to true or false.")
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
     def get_xml_info(self):
         """
         使用lxml模块解析huawei manila配置文件
@@ -279,10 +290,8 @@ class DriverConfig(object):
 
     def _ssl_verify(self, xml_root):
         text = xml_root.findtext('Storage/SslCertVerify')
-        if not text or not text.strip():
-            setattr(self.config, 'ssl_verify', False)
-        else:
-            setattr(self.config, 'ssl_verify', text.strip())
+        text = self._parser_ssl_value(text)
+        setattr(self.config, 'ssl_verify', text)
 
     def _ssl_cert_path(self, xml_root):
         text = xml_root.findtext('Storage/SslCertPath')
@@ -480,4 +489,6 @@ class DriverConfig(object):
             "storage_cert_filepath": self.config.safe_get('storage_cert_filepath'),
             "storage_ssl_two_way_auth": self.config.safe_get('storage_ssl_two_way_auth')
         }
+        if self.config.safe_get('storage_key_pwd'):
+            mutual_authentication["storage_key_pwd"] = self.config.safe_get('storage_key_pwd')
         setattr(self.config, 'mutual_authentication', mutual_authentication)
