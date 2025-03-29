@@ -1,4 +1,4 @@
-# 2.7.2
+# 2.7.4
 ## Mappings between Cinder Driver and OpenStack versions
 
 | OpenStack |Mitaka|Newton|Ocata|Pike|Queens|Rocky|Stein|Train|Ussuri|Victoria|Wallaby|Xena|Yoga|Zed|Antelope|Bobcat|
