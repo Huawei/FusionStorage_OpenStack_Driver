@@ -215,6 +215,16 @@ class HuaweiNasDriver(driver.ShareDriver):
         return self.plugin_factory.instance_service(
             OperateShare, share, self.storage_features).get_pool()
 
+    def get_network_allocations_number(self):
+        """
+        Get number of network interfaces to be created.
+        Now driver don't support Driver handles share servers, So return zero
+        :return: 0
+        """
+        LOG.info("********************Get network allocation number.********************")
+        LOG.debug("Now Driver don't support Driver Handles Share Servers, Return 0")
+        return 0
+
     def _update_share_stats(self):
         """Retrieve status info from share group."""
 

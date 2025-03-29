@@ -78,7 +78,7 @@ class SuyanGfsShareTier(ShareTier):
                 'name_locator': name_locator_info.get('periodicity_migrate_policy_name_locator')
             })
             create_param.update({
-                'expiration_to_cold': self._get_tier_migrate_period_atime(migrate_policy_info)
+                'expiration_to_cold': int(self._get_tier_migrate_period_atime(migrate_policy_info))
             })
         elif init_type == "Precool":
             strategy = 'cold'
@@ -108,7 +108,7 @@ class SuyanGfsShareTier(ShareTier):
             "tier_status": self._dme_policy_status_to_enum_num(policy.get("policy_status")),
             "tier_process": policy.get("migration_percent"),
             "tier_type": self._dme_tier_grade_to_enum_suyan_str(policy.get("tier_grade")),
-            "tier_path": policy.get("file_name_filter", {}).get("filter")
+            "tier_path": policy.get("path_name", "")
         }
         LOG.debug("Get share tier status:%s successfully", share_tier_status)
         return share_tier_status
