@@ -129,10 +129,12 @@ NEW_VERSION = 0
 POOL_ID_LEN = 2
 QUERY_TIMES_OF_CLONE_VOLUME = 10
 
-HUAWEI_VALID_KEYS = ['maxIOPS', 'minIOPS', 'minBandWidth',
-                     'maxBandWidth', 'maxMBPS', 'latency', 'IOType', 'IOPriority',
-                     'IOPSLIMIT', 'MAXIOPSLIMIT', 'MINIOPSLIMIT',
-                     'MBPSLIMIT', 'MAXMBPSLIMIT', 'MINMBPSLIMIT', 'total_iops_sec', 'total_bytes_sec']
+HUAWEI_VALID_KEYS = [
+    'maxIOPS', 'minIOPS', 'minBandWidth',
+    'maxBandWidth', 'maxMBPS', 'latency', 'IOType', 'IOPriority',
+    'IOPSLIMIT', 'MAXIOPSLIMIT', 'MINIOPSLIMIT',
+    'MBPSLIMIT', 'MAXMBPSLIMIT', 'MINMBPSLIMIT', 'total_iops_sec', 'total_bytes_sec'
+]
 LOWER_LIMIT_KEYS = ['MINIOPS', 'LATENCY', 'MINBANDWIDTH', 'MINMBPS']
 UPPER_LIMIT_KEYS = ['MAXIOPS', 'MAXBANDWIDTH', 'MAXMBPS', 'TOTAL_IOPS_SEC', 'TOTAL_BYTES_SEC']
 
@@ -148,7 +150,7 @@ FSP_QOS_INFO = {
 
 class DSWAREDriver(driver.VolumeDriver):
     """Huawei FusionStorage Driver."""
-    VERSION = "2.6.3"
+    VERSION = "2.7.4"
 
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "Huawei_FusionStorage_CI"
@@ -864,8 +866,7 @@ class DSWAREDriver(driver.VolumeDriver):
             LOG.info(_LI("dmsetup remove out is %s"), out)
         volume_size_sector = int(volume_size) * 1024 * 1024 * 1024 / 512
         dm_table = "0 %s linear %s 8" % (volume_size_sector, source_dev)
-        cmd_dmsetup_create = ['dmsetup', 'create', dm_device_name,
-                              '--table', dm_table]
+        cmd_dmsetup_create = ['dmsetup', 'create', dm_device_name, '--table', dm_table]
         out, err = utils.execute(*cmd_dmsetup_create, run_as_root=True)
         LOG.info(_LI("dmsetup create cmd:%(args)s, out:%(result)s") %
                  {'args': cmd_dmsetup_create, 'result': out})
@@ -902,8 +903,10 @@ class DSWAREDriver(driver.VolumeDriver):
                      {'args': cmd_dmsetup_remove, 'result': out})
 
     def _query_volume_attach(self, volume_name, dsw_manager_ip):
-        cmd = ['vbs_cli', '-c', 'querydevwithip', '-v', volume_name, '-i',
-               dsw_manager_ip.replace('\n', ''), '-p', 0]
+        cmd = [
+            'vbs_cli', '-c', 'querydevwithip', '-v', volume_name, '-i',
+            dsw_manager_ip.replace('\n', ''), '-p', 0
+        ]
         out, err = self._execute(*cmd, run_as_root=True)
         analyse_result = self._analyse_output(out)
         LOG.info(_LI("vbs cmd is %s") % str(cmd))
@@ -924,7 +927,6 @@ class DSWAREDriver(driver.VolumeDriver):
 
     def _delete_volume(self, volume_name):
         # step1 detach volume from host before delete volume
-        # self._dsware_detach_volume(volume_name,dsw_manager_ip)
         # step2 delete volume
         result = self.dsware_client.delete_volume(volume_name)
         LOG.debug("DSWARE delete volume,result is %s", result)
@@ -945,8 +947,6 @@ class DSWAREDriver(driver.VolumeDriver):
         # step1 if volume is not exist,then return
         volume_name = self._get_dsware_volume_name(volume)
         LOG.debug("begin to delete volume in DSWARE: %s", volume_name)
-        # if not self._get_volume(volume['name']):
-        #    return True
 
         # delete qos
         vol_qos = self.query_volume_qos(volume)
@@ -1069,10 +1069,12 @@ class DSWAREDriver(driver.VolumeDriver):
             snap_provider_location['pool'] = pool_id
         snap_provider_location['snap_name'] = dsware_snapshot_name
 
-        provider_auth = {'ip': dsw_manager_ip,
-                         'pool': pool_id,
-                         'snap_name': dsware_snapshot_name,
-                         'vol_name': dsware_volume_name}
+        provider_auth = {
+            'ip': dsw_manager_ip,
+            'pool': pool_id,
+            'snap_name': dsware_snapshot_name,
+            'vol_name': dsware_volume_name
+        }
         return {
             "provider_location": json.dumps(snap_provider_location),
             "provider_auth": json.dumps(provider_auth)
@@ -1105,9 +1107,6 @@ class DSWAREDriver(driver.VolumeDriver):
     def delete_snapshot(self, snapshot):
         snapshot_id = self._get_dsware_snap_name(snapshot)
         LOG.debug("delete_snapshot %s", snapshot_id)
-        # if not self._get_snapshot(snapshot_id):
-        #    return
-        # else:
         self._delete_snapshot(snapshot_id)
 
     def _rollback_snapshot(self, snapshot_id, volume_id):
@@ -1131,31 +1130,35 @@ class DSWAREDriver(driver.VolumeDriver):
         reserved_percentage = self.configuration.reserved_percentage
 
         for pool_info in pool_sets:
-            pool = {'pool_name': pool_info['pool_id'],
-                    'total_capacity_gb': float(pool_info['total_capacity']) / 1024,
-                    'provisioned_capacity_gb': float(pool_info['alloc_capacity']) / 1024,
-                    'free_capacity_gb': (float(pool_info['total_capacity']) - float(pool_info['used_capacity'])) / 1024,
-                    'QoS_support': True,
-                    'multiattach': True,
-                    'reserved_percentage': reserved_percentage,
-                    'thin_provisioning_support': True,
-                    'max_over_subscription_ratio': self.pool_ratio_dict.get(pool_info['pool_id'])}
+            pool = {
+                'pool_name': pool_info['pool_id'],
+                'total_capacity_gb': float(pool_info['total_capacity']) / 1024,
+                'provisioned_capacity_gb': float(pool_info['alloc_capacity']) / 1024,
+                'free_capacity_gb': (float(pool_info['total_capacity']) - float(pool_info['used_capacity'])) / 1024,
+                'QoS_support': True,
+                'multiattach': True,
+                'reserved_percentage': reserved_percentage,
+                'thin_provisioning_support': True,
+                'max_over_subscription_ratio': self.pool_ratio_dict.get(pool_info['pool_id'])
+            }
             pools_status.append(pool)
 
         return pools_status
 
     def _update_pool_info_status(self):
-        status = {'volume_backend_name': self.configuration.volume_backend_name,
-                  'vendor_name': 'Open Source',
-                  'driver_version': self.VERSION,
-                  'storage_protocol': 'dsware',
-                  'total_capacity_gb': 0,
-                  'free_capacity_gb': 0,
-                  'reserved_percentage': self.configuration.reserved_percentage,
-                  'QoS_support': True,
-                  'multiattach': True,
-                  'thin_provisioning_support': True,
-                  'max_over_subscription_ratio': float(self.configuration.over_ratio[0])}
+        status = {
+            'volume_backend_name': self.configuration.volume_backend_name,
+            'vendor_name': 'Open Source',
+            'driver_version': self.VERSION,
+            'storage_protocol': 'dsware',
+            'total_capacity_gb': 0,
+            'free_capacity_gb': 0,
+            'reserved_percentage': self.configuration.reserved_percentage,
+            'QoS_support': True,
+            'multiattach': True,
+            'thin_provisioning_support': True,
+            'max_over_subscription_ratio': float(self.configuration.over_ratio[0])
+        }
 
         pool_id = 0
         pool_info = self.dsware_client.query_pool_info(pool_id)
@@ -1176,8 +1179,12 @@ class DSWAREDriver(driver.VolumeDriver):
             self._stats = None
 
     def _update_pool_id_list_status(self):
-        status = {'volume_backend_name': self.configuration.volume_backend_name, 'vendor_name': 'Open Source', 'driver_version': self.VERSION,
-                  'storage_protocol': 'dsware'}
+        status = {
+            'volume_backend_name': self.configuration.volume_backend_name,
+            'vendor_name': 'Open Source',
+            'driver_version': self.VERSION,
+            'storage_protocol': 'dsware'
+        }
 
         pool_sets = self.dsware_client.query_pool_id_list(self.pool_id_list)
         if not pool_sets:
@@ -1386,7 +1393,6 @@ class DSWAREDriver(driver.VolumeDriver):
                     msg = (_("DSware detach volume from host failed: %s") %
                            volume_detach_result['ret_desc'])
                     LOG.error(msg)
-                    # raise exception.VolumeBackendAPIException(data=msg)
             except Exception as err:
                 LOG.error(_LE("DSware detach volume from host error:%(err)s"),
                           {'err': err})
@@ -1427,15 +1433,17 @@ class DSWAREDriver(driver.VolumeDriver):
         # secret_key to UDS
         secret_key = CONF.s3_store_secret_key_for_cinder
         cmkid_in_data_src_url = cmk_id if cmk_id is not None else ""
-        data_src_url = {'source': source_type,
-                        'format': disk_format,
-                        'proto': http_method,
-                        'ip': ip,
-                        'port': port,
-                        'bucket': bucket_name,
-                        'object': object_name,
-                        'ak': access_key,
-                        'sk': secret_key}
+        data_src_url = {
+            'source': source_type,
+            'format': disk_format,
+            'proto': http_method,
+            'ip': ip,
+            'port': port,
+            'bucket': bucket_name,
+            'object': object_name,
+            'ak': access_key,
+            'sk': secret_key
+        }
         if is_encrypted is not None and str(is_encrypted) == '1':
             data_src_url.update({'encrypt': is_encrypted,
                                  'vk': properties.get('__system__dek', ''),
@@ -1474,8 +1482,10 @@ class DSWAREDriver(driver.VolumeDriver):
                 is_encrypted = meta_data.get('__system__encrypted', None)
             if '__system__cmkid' in meta_data:
                 cmk_id = meta_data.get('__system__cmkid', None)
-        model_lld_update = {"metadata": meta_data,
-                            "provider_location": json.dumps(provider_location)}
+        model_lld_update = {
+            "metadata": meta_data,
+            "provider_location": json.dumps(provider_location)
+        }
         return model_lld_update, is_encrypted, cmk_id, offset
 
     def create_LLD_volume(self, volume, image_meta):
@@ -1485,9 +1495,11 @@ class DSWAREDriver(driver.VolumeDriver):
         pool_id = self._get_poolid_from_host(volume['host'])
         # G to M
         volume_size = volume['size'] * units.Ki
-        provider_location = {'offset': 0, 'storage_type': 'FusionStorage',
-                             'ip': dsw_manager_ip, 'pool': pool_id,
-                             'vol_name': dsware_volume_name}
+        provider_location = {
+            'offset': 0, 'storage_type': 'FusionStorage',
+            'ip': dsw_manager_ip, 'pool': pool_id,
+            'vol_name': dsware_volume_name
+        }
         volume_auth_token = volume._context.auth_token
 
         model_lld_update, is_encrypted, cmk_id, offset = \
@@ -1512,8 +1524,10 @@ class DSWAREDriver(driver.VolumeDriver):
             data_src_url, image_size, offset, cache_flag, is_encrypted, cmk_id,
             volume_auth_token, replace)
 
-        replication_driver_data = {'ip': dsw_manager_ip, 'pool': pool_id,
-                                   'vol_name': dsware_volume_name}
+        replication_driver_data = {
+            'ip': dsw_manager_ip, 'pool': pool_id,
+            'vol_name': dsware_volume_name
+        }
         model_lld_update['replication_driver_data'] = \
             json.dumps(replication_driver_data)
 
@@ -1755,9 +1769,11 @@ class DSWAREDriver(driver.VolumeDriver):
             template_snap_uuid)
 
         # copy image to new raw volume
-        raw_volume_ref = {'id': raw_uuid, 'size': min_disk,
-                          'host': volume_ref['host'], 'name': raw_vol_name,
-                          'volume_metadata': {}}
+        raw_volume_ref = {
+            'id': raw_uuid, 'size': min_disk,
+            'host': volume_ref['host'], 'name': raw_vol_name,
+            'volume_metadata': {}
+        }
         # volume_name is acquired from provider_location in volume object
         provider_location = {'vol_name': raw_vol_name, 'offset': offset}
         raw_volume_ref['provider_location'] = json.dumps(provider_location)
@@ -1927,9 +1943,10 @@ class DSWAREDriver(driver.VolumeDriver):
         provider_location['ip'] = dsw_manager_ip
         provider_location['pool'] = pool_id
         provider_location['vol_name'] = dsware_volume_name
-        model_quick_update = {"metadata": meta_data,
-                              "provider_location":
-                                  json.dumps(provider_location)}
+        model_quick_update = {
+            "metadata": meta_data,
+            "provider_location": json.dumps(provider_location)
+        }
         if provider_location['offset'] == 4:
             # When volume_ref['size'] is large than min_disk. We also need
             # to extend 1M siz, for when nova attach the volume, the dm
@@ -1939,9 +1956,11 @@ class DSWAREDriver(driver.VolumeDriver):
 
     def _create_volume_from_master(self, volume_ref, master, pool_id,
                                    min_disk):
-        master_snap_ref = {'id': master['id'],
-                           'name': master['snap_name'],
-                           'volume_size': master['size']}
+        master_snap_ref = {
+            'id': master['id'],
+            'name': master['snap_name'],
+            'volume_size': master['size']
+        }
         context = cinder_context.get_admin_context()
 
         try:
@@ -1956,9 +1975,11 @@ class DSWAREDriver(driver.VolumeDriver):
                                           volume_size,
                                           master_snap_ref['name'])
 
-            replication_driver_data = {'ip': dsw_manager_ip,
-                                       'pool': pool_id,
-                                       'vol_name': dsware_volume_name}
+            replication_driver_data = {
+                'ip': dsw_manager_ip,
+                'pool': pool_id,
+                'vol_name': dsware_volume_name
+            }
             model_quick_update['replication_driver_data'] = json.dumps(
                 replication_driver_data)
         except Exception as e:
@@ -2241,8 +2262,7 @@ class DSWAREDriver(driver.VolumeDriver):
                     msg = _('quickstart volume create failed')
                     raise exception.VolumeBackendAPIException(data=msg)
 
-            meta_data = {'lun_name': dsware_volume_name,
-                         'lun_wwn': result.get('wwn')}
+            meta_data = {'lun_name': dsware_volume_name, 'lun_wwn': result.get('wwn')}
             provider_location = {'offset': 0,
                                  'storage_type': 'FusionStorage',
                                  'ip': self.dsware_client.get_manage_ip(),
@@ -2302,7 +2322,6 @@ class DSWAREDriver(driver.VolumeDriver):
                         'volume status is:%(status)s.')
                 LOG.error(msg, {'new_volume_name': volume_name,
                                 'status': status})
-                # raise exception.VolumeDriverException(message=msg)
                 raise loopingcall.LoopingCallDone(retvalue=False)
             if self.quickstart_volume_count > \
                     self.configuration.quickstart_interval_one_timeout:
@@ -2310,7 +2329,6 @@ class DSWAREDriver(driver.VolumeDriver):
                         'Volume: %(new_volume_name)s, status: %(status)s')
                 LOG.error(msg, {'new_volume_name': volume_name,
                                 'status': current_volume['status']})
-                # raise exception.VolumeDriverException(message=msg)
                 raise loopingcall.LoopingCallDone(retvalue=False)
         else:
             # when the volume is not exist, it will enter here
@@ -2352,7 +2370,6 @@ class DSWAREDriver(driver.VolumeDriver):
                         'Volume: %(new_volume_name)s, status: %(status)s')
                 LOG.error(msg, {'new_volume_name': volume_name,
                                 'status': current_volume['status']})
-                # raise exception.VolumeDriverException(message=msg)
                 raise loopingcall.LoopingCallDone(retvalue=False)
         else:
             # when the volume is not exist, it will enter here
@@ -2399,21 +2416,25 @@ class DSWAREDriver(driver.VolumeDriver):
         pool_id = self._get_poolid_from_host(volume['host'])
         dsware_volume_name = self._get_dsware_volume_name(volume)
 
-        snap_provider_location = {'offset': 0,
-                                  'storage_type': 'FusionStorage',
-                                  'ip': dsw_manager_ip,
-                                  'pool': pool_id,
-                                  'snap_name': dsware_snapshot_name}
+        snap_provider_location = {
+            'offset': 0,
+            'storage_type': 'FusionStorage',
+            'ip': dsw_manager_ip,
+            'pool': pool_id,
+            'snap_name': dsware_snapshot_name
+        }
 
-        provider_auth = {'ip': dsw_manager_ip,
-                         'pool': pool_id,
-                         'snap_name': dsware_snapshot_name,
-                         'vol_name': dsware_volume_name,
-                         'storage_type':
-                             snap_provider_location['storage_type']}
+        provider_auth = {
+            'ip': dsw_manager_ip,
+            'pool': pool_id,
+            'snap_name': dsware_snapshot_name,
+            'vol_name': dsware_volume_name,
+            'storage_type': snap_provider_location['storage_type']
+        }
         model_update = {
             "provider_location": json.dumps(snap_provider_location),
-            "provider_auth": json.dumps(provider_auth)}
+            "provider_auth": json.dumps(provider_auth)
+        }
         return model_update
 
     def _get_snapshot_info_by_ref(self, existing_ref):
@@ -2480,8 +2501,7 @@ class DSWAREDriver(driver.VolumeDriver):
 
         qos_spec = self._get_qos_specs(qos_specs_id)
         if qos_spec['result'] == 'not support':
-            msg = (_("DSWARE  get QoS specs failed! QoS_ID = %s "),
-                   str(qos_specs_id))
+            msg = (_("DSWARE  get QoS specs failed! QoS_ID = %s "), str(qos_specs_id))
             raise exception.VolumeBackendAPIException(data=msg)
 
         qos_info = fspythonapi.qos_info.copy()
@@ -2516,9 +2536,7 @@ class DSWAREDriver(driver.VolumeDriver):
 
     def _check_qos_parameter(self, qos_info):
         if qos_info['max_iops'] == '' or qos_info['max_mbps'] == '':
-            msg = (_("DSWARE  qos_info parameter error: "
-                     "max_iops or max_mbps is null! %s"),
-                   str(qos_info))
+            msg = (_("DSWARE  qos_info parameter error: max_iops or max_mbps is null! %s"), str(qos_info))
             LOG.error(_LE("%s"), msg)
             return False
         return True
@@ -2537,8 +2555,7 @@ class DSWAREDriver(driver.VolumeDriver):
         # get new qos info
         qos_specs_id = new_type.get('qos_specs_id')
         if not qos_specs_id:
-            msg = (_("DSWARE  get qos_type QoS failed! qos_type = %s "),
-                   new_type)
+            msg = (_("DSWARE  get qos_type QoS failed! qos_type = %s "), new_type)
             raise exception.VolumeBackendAPIException(data=msg)
 
         # calculate partial qos info
@@ -2969,8 +2986,10 @@ class DSWAREDriver(driver.VolumeDriver):
 
     def _build_volume_info(self, volume):
         replication_driver_data = json.loads(volume['replication_driver_data'])
-        volume_info = {'name': replication_driver_data.get('vol_name'),
-                       'id': replication_driver_data.get('lun_id')}
+        volume_info = {
+            'name': replication_driver_data.get('vol_name'),
+            'id': replication_driver_data.get('lun_id')
+        }
         return volume_info
 
     def associate_qos_with_volume(self, qos_id, volume):
@@ -3348,9 +3367,11 @@ class DSWAREDriver(driver.VolumeDriver):
             msg = _("DSWARE get wwn failed! Result volume: ") % volume_name
             raise exception.VolumeBackendAPIException(data=msg)
 
-        connector_ret = {'lun_id': volume_info.get('lun_id'),
-                         'host_name': connector['host'],
-                         'port_name': connector['initiator']}
+        connector_ret = {
+            'lun_id': volume_info.get('lun_id'),
+            'host_name': connector['host'],
+            'port_name': connector['initiator']
+        }
         return {
             'driver_volume_type': 'iscsi',
             'host': connector['host'],
@@ -3653,8 +3674,10 @@ class DSWARELocalDriver(DSWAREDriver):
         return
 
     def _dsware_attach_volume(self, volume_name, dsw_manager_ip):
-        cmd = ['vbs_cli', '-c', 'attachwithip', '-v', volume_name, '-i',
-               dsw_manager_ip.replace('\n', ''), '-p', 0]
+        cmd = [
+            'vbs_cli', '-c', 'attachwithip', '-v', volume_name, '-i',
+            dsw_manager_ip.replace('\n', ''), '-p', 0
+        ]
         out, err = self._execute(*cmd, run_as_root=True)
         analyse_result = self._analyse_output(out)
         LOG.info(_LI("vbs cmd is %s") % str(cmd))
@@ -3662,8 +3685,10 @@ class DSWARELocalDriver(DSWAREDriver):
         return analyse_result
 
     def _dsware_detach_volume(self, volume_name, dsw_manager_ip):
-        cmd = ['vbs_cli', '-c', 'detachwithip', '-v', volume_name, '-i',
-               dsw_manager_ip.replace('\n', ''), '-p', 0]
+        cmd = [
+            'vbs_cli', '-c', 'detachwithip', '-v', volume_name, '-i',
+            dsw_manager_ip.replace('\n', ''), '-p', 0
+        ]
         out, err = self._execute(*cmd, run_as_root=True)
         analyse_result = self._analyse_output(out)
         LOG.info(_LI("vbs cmd is %s") % str(cmd))
@@ -4157,8 +4182,7 @@ class DSWAREISCSIDriver(DSWAREDriver):
         LOG.info("begin iscsi terminate_connection")
 
         properties = {'iqn': connector['initiator']}
-        host_info = {'driver_volume_type': 'iSCSI',
-                     'data': properties}
+        host_info = {'driver_volume_type': 'iSCSI', 'data': properties}
 
         self.del_volume_from_host(volume, connector)
 
