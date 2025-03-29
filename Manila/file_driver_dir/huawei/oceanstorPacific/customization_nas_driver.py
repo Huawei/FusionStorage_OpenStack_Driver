@@ -114,7 +114,7 @@ class HuaweiNasDriverForSuyan(HuaweiNasDriver, SuyanCustomizationApi):
         """苏研定制接口，查询share所属命名空间的qos策略"""
 
         LOG.info("********************Do show_qos.********************")
-        self.plugin_factory.instance_service(
+        return self.plugin_factory.instance_service(
             OperateShare, share, self.storage_features).show_qos()
 
     def modify_share_tier_policy(self, context, share, new_share):
