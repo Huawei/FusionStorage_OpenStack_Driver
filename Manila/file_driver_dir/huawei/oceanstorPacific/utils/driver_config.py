@@ -97,24 +97,16 @@ class DriverConfig(object):
         return optimized_pools_type
 
     @staticmethod
-    def _check_pool_type(pool_type, pool_type_list, pool_type_info):
+    def _check_pool_type(pool_type_list, pool_type_info):
         """
         Check pool_type configure is valid or not
         """
-        if len(pool_type_list) > 2:
-            msg = ("The length of pool_type:'%s' cannot over 2," % pool_type_list)
-            LOG.error(msg)
-            raise exception.BadConfigurationException(msg)
-        if len(pool_type_list) == 2 and pool_type != constants.TIER_POOL_TYPE:
-            msg = ("Configuration pool_type:'%s' must be set to '%s' when"
-                   " pool_type length is 2" % (pool_type, constants.TIER_POOL_TYPE))
-            LOG.error(msg)
-            raise exception.BadConfigurationException(msg)
-        if len(pool_type_list) == 1 and pool_type not in constants.POOL_TYPE_LIST:
-            msg = ("Configuration pool_type:'%s' must in %s" %
-                   (pool_type, constants.POOL_TYPE_LIST))
-            LOG.error(msg)
-            raise exception.BadConfigurationException(msg)
+        for pool_type in pool_type_list:
+            if pool_type not in constants.POOL_TYPE_LIST:
+                msg = ("Configuration pool_type:'%s' must in %s" %
+                       (pool_type, constants.POOL_TYPE_LIST))
+                LOG.error(msg)
+                raise exception.BadConfigurationException(msg)
         pool_type_info['pool_type'] = pool_type_list
 
     @staticmethod
@@ -447,10 +439,9 @@ class DriverConfig(object):
             LOG.error(msg)
             raise exception.BadConfigurationException(msg)
 
-
         self._check_resource_pool(resource_pool, pool_type_info)
         pool_type_list = pool_type.split('&')
-        self._check_pool_type(pool_type, pool_type_list, pool_type_info)
+        self._check_pool_type(pool_type_list, pool_type_info)
         self._check_qos_coefficients(qos_coefficients, pool_type_list, pool_type_info)
 
     def _check_resource_pool(self, resource_pool, pool_type_info):

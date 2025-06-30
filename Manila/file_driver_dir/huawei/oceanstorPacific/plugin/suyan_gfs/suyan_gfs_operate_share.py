@@ -293,6 +293,10 @@ class SuyanGFSOperateShare(CommunityOperateShare):
 
     def _check_space_for_dtree(self, name_locator, new_hard_size_in_gb):
         dtree_detail = self.client.query_gfs_dtree_detail(name_locator)
+        if not dtree_detail:
+            msg = "The dtree %s does not exist." % name_locator
+            LOG.error(msg)
+            raise exception.InvalidRequest(msg)
         org_hard_size_in_gb = self._get_quota_in_gb(dtree_detail)
 
         if new_hard_size_in_gb < org_hard_size_in_gb:

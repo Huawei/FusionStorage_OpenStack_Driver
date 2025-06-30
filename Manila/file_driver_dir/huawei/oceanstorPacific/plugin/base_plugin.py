@@ -205,41 +205,14 @@ class BasePlugin(object):
         return namespace_data_infos, dtree_data_infos
 
     @staticmethod
-    def _calc_tier_share_qos_mbps(pool_qos_param, hot_data_size, cold_data_size):
-        """
-        The tier share uses the sum of the hot_size'mbps and cold_size'mbps as the final max_mbps.
-        """
-        # tier share must have NFS_HDD%DPC_SSD pool_type
-        if len(pool_qos_param) < 2:
-            error_msg = ("Tier share's pool_qos_param must config to %s,"
-                         " current pool_qos_param is %s" %
-                         (constants.TIER_POOL_TYPE, pool_qos_param))
-            LOG.error(error_msg)
-            raise exception.BadConfigurationException(error_msg)
-
-        nfs_hdd_qos_coefficient = pool_qos_param.get('NFS_HDD')
-        dpc_ssd_qos_coefficient = pool_qos_param.get('DPC_SSD')
-        hot_size_to_tib = driver_utils.capacity_unit_down_conversion(
-            float(hot_data_size), constants.BASE_VALUE, constants.POWER_BETWEEN_GB_AND_TB
-        )
-        cold_size_to_tib = driver_utils.capacity_unit_down_conversion(
-            float(cold_data_size), constants.BASE_VALUE, constants.POWER_BETWEEN_GB_AND_TB
-        )
-        max_band_width = (driver_utils.qos_calc_formula(cold_size_to_tib, nfs_hdd_qos_coefficient) +
-                          driver_utils.qos_calc_formula(hot_size_to_tib, dpc_ssd_qos_coefficient))
-
-        return max_band_width
-
-    @staticmethod
-    def _calc_common_share_qos_mbps(pool_qos_param, share_size):
+    def _calc_common_share_qos_mbps(qos_coefficient, share_size):
         """
         The common share uses the total share size's mbps as the final max_mbps.
         """
         share_size_to_tib = driver_utils.capacity_unit_down_conversion(
             float(share_size), constants.BASE_VALUE, constants.POWER_BETWEEN_GB_AND_TB
         )
-        for qos_coefficient in pool_qos_param.values():
-            return driver_utils.qos_calc_formula(share_size_to_tib, qos_coefficient)
+        return driver_utils.qos_calc_formula(share_size_to_tib, qos_coefficient)
 
     @staticmethod
     def _get_acl_type_by_share_type(acl_policy_config):
@@ -261,6 +234,15 @@ class BasePlugin(object):
             threading_task_list.append(threading_task)
         for task in threading_task_list:
             task.get_result()
+
+    def _set_qos_coefficient(self, data_size, coefficient, qos_coefficient_info):
+        if data_size and not coefficient:
+            error_msg = "The QoS formula matching the current resource pool type is not found," \
+                        " The resource pool type is %s" % self.share_proto
+            LOG.error(error_msg)
+            raise exception.BadConfigurationException(error_msg)
+        if data_size and coefficient:
+            qos_coefficient_info[coefficient] = data_size
 
     def _get_share_metadata(self):
         try:
@@ -413,16 +395,48 @@ class BasePlugin(object):
             LOG.debug("Share qos param by pool type is %s", qos_config)
             return qos_config
 
-        if hot_data_size and cold_data_size:
-            qos_config[constants.MAX_MBPS] = self._calc_tier_share_qos_mbps(
-                pool_qos_param, hot_data_size, cold_data_size)
-            LOG.debug("Share qos param by pool type is %s", qos_config)
-            return qos_config
+        qos_coefficient_info = self._get_qos_coefficient_by_protocol_and_tier(
+            share_size, cold_data_size, hot_data_size, pool_qos_param)
 
-        qos_config[constants.MAX_MBPS] = self._calc_common_share_qos_mbps(
-            pool_qos_param, share_size)
+        sum_qos_mbps = 0
+        for coefficient, coefficient_value in qos_coefficient_info.items():
+            sum_qos_mbps += self._calc_common_share_qos_mbps(coefficient, coefficient_value)
+
+        qos_config[constants.MAX_MBPS] = sum_qos_mbps
         LOG.debug("Share qos param by pool type is %s", qos_config)
         return qos_config
+
+    def _get_qos_coefficient_by_protocol_and_tier(self, share_size, cold_data_size,
+                                                  hot_data_size, pool_qos_param):
+        """
+        Get the QoS coefficient according to the protocol and tier.
+        Parameters:
+            share_size
+            cold_data_size
+            hot_data_size
+            pool_qos_param
+        Return value:
+        Returns a dictionary that includes the QoS coefficients and their corresponding sizes.
+        """
+        if hot_data_size is None and cold_data_size is None:
+            if len(pool_qos_param) != 1:
+                error_msg = "No tier and multi-protocol resource pools can only config one pool_type."
+                LOG.error(error_msg)
+                raise exception.BadConfigurationException(error_msg)
+            for _, coefficient in pool_qos_param.items():
+                return {coefficient: share_size}
+
+        qos_coefficient_info = {}
+        self._set_qos_coefficient(
+            cold_data_size,
+            pool_qos_param.get(self._get_medium_pool_type(constants.HDD_POOL_PRIORITY, 'HDD')),
+            qos_coefficient_info)
+
+        self._set_qos_coefficient(
+            hot_data_size,
+            pool_qos_param.get(self._get_medium_pool_type(constants.SSD_POOL_PRIORITY, 'SSD')),
+            qos_coefficient_info)
+        return qos_coefficient_info
 
     def _operate_share_qos(self, namespace_name, qos_config):
         """
@@ -491,3 +505,11 @@ class BasePlugin(object):
             return constants.ACL_POLICY_NTFS
 
         return constants.ACL_POLICY_MIXED
+
+    def _get_medium_pool_type(self, protocol_priority, medium):
+        protocol = 'NFS'
+        for priority in protocol_priority:
+            if priority in self.share_proto:
+                protocol = priority
+                break
+        return protocol + '_' + medium

@@ -75,7 +75,7 @@ LOG = log.getLogger(__name__)
 
 class HuaweiNasDriver(driver.ShareDriver):
     """Huawei Oceanstor Pacific Share Driver."""
-    VERSION = "2.7.4"
+    VERSION = "25.1.0"
 
     def __init__(self, *args, **kwargs):
         """Do initialization."""

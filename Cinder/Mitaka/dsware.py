@@ -150,7 +150,7 @@ FSP_QOS_INFO = {
 
 class DSWAREDriver(driver.VolumeDriver):
     """Huawei FusionStorage Driver."""
-    VERSION = "2.7.4"
+    VERSION = "25.1.0"
 
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "Huawei_FusionStorage_CI"
