@@ -127,7 +127,7 @@ CONF.register_opts(volume_opts)
 @interface.volumedriver
 class DSWAREBaseDriver(customization_driver.DriverForPlatform,
                        driver.VolumeDriver):
-    VERSION = "2.6.3"
+    VERSION = "25.1.0"
     CI_WIKI_NAME = 'Huawei_FusionStorage_CI'
 
     def __init__(self, *args, **kwargs):
@@ -178,8 +178,7 @@ class DSWAREBaseDriver(customization_driver.DriverForPlatform,
 
     def check_for_setup_error(self):
         all_pools = self.client.query_storage_pool_info()
-        all_pools_name = [p['poolName'] for p in all_pools
-                          if p.get('poolName')]
+        all_pools_name = [p['poolName'] for p in all_pools if p.get('poolName')]
 
         for pool in self.configuration.pools_name:
             if pool not in all_pools_name:
@@ -191,11 +190,12 @@ class DSWAREBaseDriver(customization_driver.DriverForPlatform,
     def _update_pool_stats(self):
         backend_name = self.configuration.safe_get(
             'volume_backend_name') or self.__class__.__name__
-        data = {"volume_backend_name": backend_name,
-                "driver_version": self.VERSION,
-                "pools": [],
-                "vendor_name": "Huawei"
-                }
+        data = {
+            "volume_backend_name": backend_name,
+            "driver_version": self.VERSION,
+            "pools": [],
+            "vendor_name": "Huawei"
+        }
         all_pools = self.client.query_storage_pool_info()
 
         for pool in all_pools:
@@ -221,10 +221,10 @@ class DSWAREBaseDriver(customization_driver.DriverForPlatform,
         status = {}
         capacity = self._get_capacity(pool_info=pool_info)
         status.update({
-            "pool_name": pool_info['poolName'],
-            "total_capacity_gb": capacity['total_capacity_gb'],
-            "free_capacity_gb": capacity['free_capacity_gb'],
-            "provisioned_capacity_gb": capacity['provisioned_capacity_gb'],
+            "pool_name": pool_info.get('poolName'),
+            "total_capacity_gb": capacity.get('total_capacity_gb'),
+            "free_capacity_gb": capacity.get('free_capacity_gb'),
+            "provisioned_capacity_gb": capacity.get('provisioned_capacity_gb'),
             "location_info": self.client.esn,
             "QoS_support": True,
             'multiattach': True,
@@ -246,6 +246,7 @@ class DSWAREBaseDriver(customization_driver.DriverForPlatform,
         result = self.client.query_volume_by_name(vol_name=vol_name)
         if result:
             return result
+        return None
 
     def _check_volume_mapped(self, vol_name):
         host_list = self.client.get_host_by_volume(vol_name)
@@ -548,6 +549,7 @@ class DSWAREBaseDriver(customization_driver.DriverForPlatform,
             except Exception:
                 LOG.warning("Query volume info by id failed!")
                 return self.client.get_volume_by_id(pool_id, vol_id)
+        return None
 
     def _get_volume_info(self, pool_id, existing_ref):
         vol_name = existing_ref.get('source-name')
@@ -574,19 +576,18 @@ class DSWAREBaseDriver(customization_driver.DriverForPlatform,
         old_opts = fs_utils.get_volume_specs(self.client, vol_name)
 
         # Not support from existence to absence or change
-        if old_opts.get("qos"):
-            if old_opts.get("qos") != new_opts.get("qos"):
+        if old_opts.get(constants.QOS):
+            if old_opts.get(constants.QOS) != new_opts.get(constants.QOS):
                 msg = (_("The current volume qos is: %(old_qos)s, the manage "
                          "volume qos is: %(new_qos)s")
-                       % {"old_qos": old_opts.get("qos"),
-                          "new_qos": new_opts.get("qos")})
+                       % {"old_qos": old_opts.get(constants.QOS),
+                          "new_qos": new_opts.get(constants.QOS)})
                 self._raise_exception(msg)
-        elif new_opts.get("qos"):
-            new_qos["qos"] = new_opts.get("qos")
-            old_qos["qos"] = {}
+        elif new_opts.get(constants.QOS):
+            new_qos[constants.QOS] = new_opts.get(constants.QOS)
+            old_qos[constants.QOS] = {}
 
-        change_opts = {"old_opts": old_qos,
-                       "new_opts": new_qos}
+        change_opts = {"old_opts": old_qos, "new_opts": new_qos}
 
         return change_opts
 
@@ -708,12 +709,14 @@ class DSWAREBaseDriver(customization_driver.DriverForPlatform,
 
         old_opts = fs_utils.get_volume_specs(self.client, vol_name)
         new_opts = fs_utils.get_volume_type_params(new_type, self.client)
-        if old_opts.get('qos') != new_opts.get('qos'):
-            before_change["qos"] = old_opts.get("qos")
-            after_change["qos"] = new_opts.get("qos")
+        if old_opts.get(constants.QOS) != new_opts.get(constants.QOS):
+            before_change[constants.QOS] = old_opts.get(constants.QOS)
+            after_change[constants.QOS] = new_opts.get(constants.QOS)
 
-        change_opts = {"old_opts": before_change,
-                       "new_opts": after_change}
+        change_opts = {
+            "old_opts": before_change,
+            "new_opts": after_change
+        }
         return migrate, change_opts
 
     def retype(self, context, volume, new_type, diff, host):
@@ -774,6 +777,7 @@ class DSWAREBaseDriver(customization_driver.DriverForPlatform,
             return False
 
         vol_name, dst_lun_id = self._create_dst_volume(volume, host)
+        LOG.debug("Begin migrate volume, volume name:%s, dst lun id:%s. ", vol_name, dst_lun_id)
 
         try:
             self.client.create_lun_migration(src_lun_id, dst_lun_id)
@@ -1222,13 +1226,12 @@ class DSWAREDriver(DSWAREBaseDriver):
         return stats
 
     def _get_manager_ip(self, context):
-        if self.configuration.manager_ips.get(context['host']):
-            return self.configuration.manager_ips.get(context['host'])
-        else:
+        if not self.configuration.manager_ips.get(context['host']):
             msg = _("The required host: %(host)s and its manager ip are not "
                     "included in the configuration file."
                     ) % {"host": context['host']}
             self._raise_exception(msg)
+        return self.configuration.manager_ips.get(context['host'])
 
     def _attach_volume(self, context, volume, properties, remote=False):
         vol_name = self._get_vol_name(volume)
@@ -1264,7 +1267,7 @@ class DSWAREDriver(DSWAREBaseDriver):
         self.client.attach_volume(vol_name, manager_ip)
         volume_info = self.client.query_volume_by_name(vol_name=vol_name)
         vol_wwn = volume_info.get('wwn')
-        by_id_path = "/dev/disk/by-id/" + "wwn-0x%s" % vol_wwn
+        by_id_path = "/dev/disk/by-id/wwn-0x%s" % vol_wwn
         properties = {'device_path': by_id_path}
 
         LOG.info("Wait %(t)s second(s) for scanning the target device %(dev)s."

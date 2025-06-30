@@ -249,6 +249,9 @@ class DMEClient(RestClient):
             "name_locator": name_locator
         }
         result = self.call(url, data=data, method='POST')
+        if result.get("error_code") == 'common.0005':
+            LOG.info("The object %s does not exist.", name_locator)
+            return {}
         self._assert_result(result, "Query GFS dtree detail failed,")
         return result
 

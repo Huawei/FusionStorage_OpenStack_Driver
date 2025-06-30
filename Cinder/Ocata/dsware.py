@@ -123,7 +123,7 @@ CONF.register_opts(volume_opts)
 @interface.volumedriver
 class DSWAREBaseDriver(customization_driver.DriverForPlatform,
                        driver.VolumeDriver):
-    VERSION = "2.7.4"
+    VERSION = "25.1.0"
     CI_WIKI_NAME = 'Huawei_FusionStorage_CI'
 
     def __init__(self, *args, **kwargs):
