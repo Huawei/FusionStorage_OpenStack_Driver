@@ -123,7 +123,7 @@ CONF.register_opts(volume_opts)
 @interface.volumedriver
 class DSWAREBaseDriver(customization_driver.DriverForPlatform,
                        driver.VolumeDriver):
-    VERSION = "25.1.0"
+    VERSION = "25.2.0"
     CI_WIKI_NAME = 'Huawei_FusionStorage_CI'
 
     def __init__(self, *args, **kwargs):
@@ -1274,6 +1274,9 @@ class DSWAREDriver(DSWAREBaseDriver):
                 'data': properties}
 
     def terminate_connection(self, volume, connector, **kwargs):
+        if fs_utils.is_volume_multi_attach_to_same_host(connector, volume):
+            return
+
         if self._check_volume_exist(volume):
             manager_ip = self._get_manager_ip(connector)
             vol_name = self._get_vol_name(volume)
@@ -1338,6 +1341,9 @@ class DSWAREISCSIDriver(DSWAREBaseDriver):
         def _terminate_connection_locked(host):
             LOG.info("Start to terminate iscsi connection, volume: %(vol)s, "
                      "connector: %(con)s", {"vol": volume, "con": connector})
+            if fs_utils.is_volume_multi_attach_to_same_host(volume, connector):
+                return
+
             if not self._check_volume_exist(volume):
                 LOG.info("Terminate_connection, volume %(vol)s is not exist "
                          "on the array ", {"vol": volume})

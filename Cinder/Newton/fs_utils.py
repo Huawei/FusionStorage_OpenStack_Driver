@@ -789,3 +789,26 @@ def get_volume_metadata(volume):
     for item in volume_metadata:
         result_data[item.get('key')] = item.get('value')
     return result_data
+
+
+def is_volume_multi_attach_to_same_host(volume, connector):
+    if not volume.multiattach:
+        return False
+
+    current_host = connector.get('host', '')
+    sum_same_host_num = 0
+    attachments = volume.volume_attachment
+
+    for attachment in attachments:
+        attach_host = attachment.get('connector', {}).get('host')
+        if attach_host is None:
+            LOG.info("Current volume attachment connector attr doesn't exist")
+            continue
+        if attach_host == current_host:
+            sum_same_host_num += 1
+
+    if sum_same_host_num > 1:
+        LOG.info("Volume is multi-attach and attached to the same host"
+                 " multiple times")
+        return True
+    return False
