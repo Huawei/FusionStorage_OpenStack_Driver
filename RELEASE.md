@@ -15,12 +15,12 @@
 
 | OpenStack |Mitaka|Newton|Ocata|Pike|Queens|Rocky|Stein|Train|Ussuri|Victoria|Wallaby|Xena|Yoga|Zed|Antelope|Bobcat|Dalmatian|
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-|Cinder Driver|x|x|x|√|x|x|x|√|x|x|x|x|x|x|x|x|x|
+|Manila Driver|x|x|x|√|x|x|x|√|x|x|x|x|x|x|x|x|x|
 
 ## Version mappings among Manila Driver, Huawei storage, and OpenStack
 | OpenStack |Huawei Storage|
 |---|---|
-|Cinder Driver|OceanStor Pacific 8.1.5/8.2.0/8.2.1/V800R001C10|
+|Manila Driver|OceanStor Pacific 8.1.5/8.2.0/8.2.1/V800R001C10|
 
 # 25.1.0
 ## Mappings between Cinder Driver and OpenStack versions
