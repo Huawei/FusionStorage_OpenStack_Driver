@@ -12,7 +12,7 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-
+import re
 import time
 
 from oslo_log import log as logging
@@ -26,6 +26,30 @@ LOG = logging.getLogger(__name__)
 class FusionStorageQoS(object):
     def __init__(self, client):
         self.client = client
+
+    @staticmethod
+    def _is_openstack_qos_name(qos_name, vol_name):
+        """
+        When querying volume QoS info by volume name,
+        if the volume does not have an associated QoS policy
+        but the storage pool which the volume belongs have an associated QoS,
+        the QoS of that storage pool will be retrieved.
+        Since the information returned by the storage cannot identify
+        whether this QoS is a storage pool QoS, Driver cannot determine
+        whether this QoS is associated with current volume.
+        As a result, when Driver attempts to disassociate the volume from the QoS,
+        an error will be reported.
+        So, Driver check the qos name whether create by openstack when update and delete qos
+        """
+        if len(vol_name) >= constants.QOS_MAX_INTERCEPT_LENGTH:
+            qos_suffix = vol_name[-constants.QOS_MAX_INTERCEPT_LENGTH::]
+        else:
+            qos_suffix = vol_name
+        qos_name_pattern = '^%s.*%s' % (constants.QOS_PREFIX, qos_suffix)
+        if re.search(qos_name_pattern, qos_name):
+            return True
+        else:
+            return False
 
     def add(self, qos, vol_name):
         localtime = time.strftime('%Y%m%d%H%M%S', time.localtime())
@@ -54,14 +78,23 @@ class FusionStorageQoS(object):
     def remove(self, vol_name):
         vol_qos = self.client.get_qos_by_vol_name(vol_name)
         qos_name = vol_qos.get("qosName")
-        if qos_name:
+        if not qos_name:
+            return
+
+        if self._is_openstack_qos_name(qos_name, vol_name):
             self.client.disassociate_qos_with_volume(vol_name, qos_name)
 
             if not self._is_qos_associate_to_volume(qos_name):
                 self.client.delete_qos(qos_name)
+        else:
+            LOG.warning("The QoS:%s is not created by OpenStack, ignore it", qos_name)
 
     def update(self, qos, vol_name):
         vol_qos = self.client.get_qos_by_vol_name(vol_name)
         qos_name = vol_qos.get("qosName")
-        if qos_name:
+        if not qos_name:
+            return
+        if self._is_openstack_qos_name(qos_name, vol_name):
             self.client.modify_qos(qos_name, qos)
+        else:
+            LOG.warning("The QoS:%s is not created by OpenStack, ignore it", qos_name)
