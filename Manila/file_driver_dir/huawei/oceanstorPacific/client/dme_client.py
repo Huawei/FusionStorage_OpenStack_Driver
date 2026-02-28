@@ -59,6 +59,23 @@ class DMEClient(RestClient):
         return total_info
 
     @staticmethod
+    def get_total_data_by_offset(func, extra_param):
+        """
+        Call the func interface cyclically to obtain the information,
+        combine it into a list and return it.
+        which is used in the paging query interface
+        """
+        offset = 1
+        total_info = []
+        while True:
+            result = func(offset, extra_param)
+            total_info = total_info + result
+            if len(result) < constants.DME_GFS_MAX_PAGE_COUNT:
+                break
+            offset += 1
+        return total_info
+
+    @staticmethod
     def _error_code(res):
         """
         get http status code and
@@ -419,6 +436,375 @@ class DMEClient(RestClient):
         totals = self.get_total_info_by_offset(
             self._get_gfs_dtree_capacities_info, cluster_name)
         return totals
+
+    def query_specified_file_system(self, param):
+        file_systems = self.get_file_systems(param)
+        if not file_systems or len(file_systems) != constants.DME_DATA_COUNT_ONE:
+            err_msg = _("Expected at most 1 file system, but got {0}.").format(len(file_systems))
+            raise exception.InvalidShare(reason=err_msg)
+
+        return file_systems[0]
+
+    def query_specified_dtree(self, param):
+        dtrees = self.get_dtrees(param)
+        if not dtrees or len(dtrees) != constants.DME_DATA_COUNT_ONE:
+            err_msg = _("Expected at most 1 dtree, but got {0}.").format(len(dtrees))
+            raise exception.InvalidShare(reason=err_msg)
+
+        return dtrees[0]
+
+    def query_specified_quota(self, param):
+        quotas = self.get_quotas(param)
+        if not quotas or len(quotas) != constants.DME_DATA_COUNT_ONE:
+            err_msg = _("Expected at most 1 quota, but got {0}.").format(len(quotas))
+            raise exception.InvalidShare(reason=err_msg)
+
+        return quotas[0]
+
+    def query_specified_pool(self, param):
+        pools = self.get_storage_pools(param)
+        if not pools or len(pools) != constants.DME_DATA_COUNT_ONE:
+            err_msg = _("Expected at most 1 pool, but got {0}.").format(len(pools))
+            raise exception.InvalidShare(reason=err_msg)
+
+        return pools[0]
+
+    def get_file_systems(self, param):
+        return self.get_total_data_by_offset(self.get_file_systems_by_page, param)
+
+    def get_file_systems_by_page(self, page_no, param):
+        request = {
+            'page_no': page_no,
+            'page_size': constants.DME_GFS_MAX_PAGE_COUNT
+        }
+        request.update(param)
+        url = '/rest/fileservice/v1/filesystems/query'
+        result = self.call(url, data=request, method='POST')
+        self._assert_result(result, 'get file system failed by page')
+        return result.get('data', [])
+
+    def get_file_system_by_name(self, param, name):
+        file_systems = self.get_file_systems(param)
+        if file_systems is None or len(file_systems) == 0:
+            raise exception.InvalidShare(reason="Can not get file systems.")
+        # 由于文件系统查询接口名称是模糊搜索,查询到的列表再通过 name 再精确过滤
+        filtered_file_systems = [fs for fs in file_systems if fs.get('name') == name]
+        # 检查过滤后的元素数量是否为 1
+        if len(filtered_file_systems) != 1:
+            raise ValueError("Expected 1 file system with name '{}', but found {}.".format(
+                name, len(filtered_file_systems)
+            ))
+        return filtered_file_systems[0]
+
+    def get_file_system_detail(self, fs_id):
+        url = '/rest/fileservice/v1/filesystems/{0}'.format(fs_id)
+        result = self.call(url, data=None, method='GET')
+        not_found_error_param = {
+            'special_code': constants.FILESYSTEM_NOT_EXIST,
+            'error_msg': 'get file system detail failed because of filesystem not exist',
+            'error_type': exception.ShareNotFound
+        }
+        self._assert_result(result, "Get file system detail failed,", special_error_code_param=not_found_error_param)
+        return result
+
+    def get_dtrees(self, param):
+        return self.get_total_data_by_offset(self.get_dtrees_by_page, param)
+
+    def get_dtrees_by_page(self, page_no, param):
+        request = {
+            'page_no': page_no,
+            'page_size': constants.DME_GFS_MAX_PAGE_COUNT
+        }
+        request.update(param)
+        url = '/rest/fileservice/v1/dtrees/query'
+        result = self.call(url, data=request, method='POST')
+        self._assert_result(result, 'get dtrees failed by page')
+        return result.get('dtrees', [])
+
+    def get_dtree_by_name_and_vstore(self, param, name, vstore_id):
+        dtrees = self.get_dtrees(param)
+        if dtrees is None or len(dtrees) == 0:
+            raise exception.InvalidShare(reason="Can not get file dtrees.")
+        # 由于Dtree查询接口名称是模糊搜索,查询到的列表再通过 name 再精确过滤
+        filtered_dtrees = [dt for dt in dtrees if dt.get('name') == name and dt.get('vstore_id') == vstore_id]
+        # 检查过滤后的元素数量是否为 1
+        if len(filtered_dtrees) != 1:
+            raise ValueError("Expected 1 dtree with name '{}', but found {}.".format(
+                name, len(filtered_dtrees)
+            ))
+        return filtered_dtrees[0]
+
+    def delete_nfs_share(self, nfs_share_ids):
+        param = {
+            'nfs_share_ids': nfs_share_ids
+        }
+        url = '/rest/fileservice/v1/nfs-shares/delete'
+        result = self.call(url, data=param, method='POST')
+        self._assert_result(result, 'delete nfs share failed')
+        return result.get('task_id')
+
+    def delete_dpc_share(self, dpc_share_ids):
+        param = {
+            'dpc_share_ids': dpc_share_ids
+        }
+        url = '/rest/fileservice/v1/dpc-shares/delete'
+        result = self.call(url, data=param, method='POST')
+        self._assert_result(result, 'delete dpc share failed')
+        return result.get('task_id')
+
+    def delete_file_system(self, file_system_ids):
+        param = {
+            'file_system_ids': file_system_ids
+        }
+        url = '/rest/fileservice/v1/filesystems/delete'
+        result = self.call(url, data=param, method='POST')
+        not_found_error_param = {
+            'special_code': constants.FILESYSTEM_NOT_EXIST,
+            'error_msg': 'Delete filesystem failed because of filesystem not exist',
+            'error_type': exception.ShareNotFound
+        }
+        self._assert_result(result, "Delete file system failed,", special_error_code_param=not_found_error_param)
+        return result.get('task_id')
+
+    def delete_dtree(self, dtree_ids):
+        param = {
+            'dtree_ids': dtree_ids
+        }
+        url = '/rest/fileservice/v1/dtrees/delete'
+        result = self.call(url, data=param, method='POST')
+        not_found_error_param = {
+            'special_code': constants.DME_DTREE_NOT_EXIST,
+            'error_msg': 'Delete dtree failed because of dtree not exist',
+            'error_type': exception.ShareNotFound
+        }
+        self._assert_result(result, "Delete dtree failed,", special_error_code_param=not_found_error_param)
+        return result.get('task_id')
+
+    def update_file_system(self, fs_id, param):
+        url = '/rest/fileservice/v1/filesystems/{0}'.format(fs_id)
+        result = self.call(url, data=param, method='PUT')
+        not_found_error_param = {
+            'special_code': constants.FILESYSTEM_NOT_EXIST,
+            'error_msg': 'update file system failed because of file system not exist',
+            'error_type': exception.ShareNotFound
+        }
+        self._assert_result(result, "update file system failed,", special_error_code_param=not_found_error_param)
+        return result.get('task_id')
+
+    def update_quota(self, quota_id, param):
+        url = '/rest/fileservice/v1/quotas/{0}'.format(quota_id)
+        result = self.call(url, data=param, method='PUT')
+        not_found_error_param = {
+            'special_code': constants.DME_QUOTA_NOT_EXIST,
+            'error_msg': 'update quota failed because of quota not exist',
+            'error_type': exception.ShareNotFound
+        }
+        self._assert_result(result, "update file system failed,", special_error_code_param=not_found_error_param)
+        return result.get('task_id')
+
+    def get_quotas(self, param):
+        return self.get_total_data_by_offset(self.get_quotas_by_page, param)
+
+    def get_quotas_by_page(self, page_no, param):
+        request = {
+            'page_no': page_no,
+            'page_size': constants.DME_GFS_MAX_PAGE_COUNT
+        }
+        request.update(param)
+        url = '/rest/fileservice/v1/quotas/query'
+        result = self.call(url, data=request, method='POST')
+        self._assert_result(result, 'get quotas failed')
+        return result.get('datas', [])
+
+    def get_storage_pools(self, param):
+        return self.get_total_data_by_offset(self.get_storage_pools_by_page, param)
+
+    def get_storage_pools_by_page(self, page_no, param):
+        request = {
+            'page_no': page_no,
+            'page_size': constants.DME_GFS_MAX_PAGE_COUNT
+        }
+        request.update(param)
+        zone_id = param.get('zone_id')
+        if zone_id is not None and zone_id:
+            url = '/rest/storagemgmt/v1/storagepools/query'
+        else:
+            url = '/rest/storagemgmt/v1/hyperscale-pools/query'
+        result = self.call(url, data=request, method='POST')
+        self._assert_result(result, 'get storage pools failed by page')
+        return result.get('datas', result.get('data', []))
+
+    def get_qos(self, param):
+        return self.get_total_data_by_offset(self.get_qos_by_page, param)
+
+    def get_qos_by_page(self, page_no, param):
+        request = {
+            'page_no': page_no,
+            'page_size': constants.DME_GFS_MAX_PAGE_COUNT
+        }
+        request.update(param)
+        url = '/rest/storagepolicy/v1/qos/query'
+        result = self.call(url, data=request, method='POST')
+        self._assert_result(result, 'get qos failed')
+        return result.get('datas', [])
+
+    def create_quota(self, param):
+        result = self.call('/rest/fileservice/v1/quotas', data=param, method='POST')
+        self._assert_result(result, "Create quota failed")
+        return result.get('task_id')
+
+    def create_dtree(self, dtree_param):
+        result = self.call('/rest/fileservice/v1/dtrees', data=dtree_param, method='POST')
+        self._assert_result(result, "Create dtree failed")
+        return result.get('task_id')
+
+    def create_file_system(self, param):
+        url = '/rest/fileservice/v1/filesystems/customize-filesystems'
+        result = self.call(url, data=param, method='POST')
+        LOG.info("call create fs, the result is %s", result)
+        self._assert_result(result, "create file system failed")
+        return result.get('task_id')
+
+    def get_storages(self, param):
+        return self.get_total_data_by_offset(self.get_get_storages_by_page, param)
+
+    def get_get_storages_by_page(self, page_no, param):
+        url = '/rest/storagemgmt/v1/storages?start=%d&limit=1000' % page_no
+        result = self.call(url, method='GET')
+        self._assert_result(result, 'get storage failed by page')
+        return result.get('datas', [])
+
+    def get_cluster_zones(self, storage_id):
+        param = {"storage_ids": [storage_id]}
+        url = '/rest/storageclusterservice/v1/zones/query'
+        result = self.call(url, data=param, method='POST')
+        self._assert_result(result, 'get zones failed by storage_id')
+        return result.get('datas', [])
+
+    def get_vstores(self, param):
+        return self.get_total_data_by_offset(self.get_vstores_by_page, param)
+
+    def get_vstores_by_page(self, page_no, param):
+        request = {
+            'page_no': page_no,
+            'page_size': constants.DME_GFS_MAX_PAGE_COUNT
+        }
+        request.update(param)
+        url = '/rest/fileservice/v1/vstores/query'
+        result = self.call(url, data=request, method='POST')
+        self._assert_result(result, 'get vstores failed by page')
+        return result.get('vstores', [])
+
+    def get_dpc_administrators(self, param):
+        return self.get_total_data_by_offset(self.get_dpc_administrators_by_page, param)
+
+    def get_dpc_administrators_by_page(self, page_no, param):
+        request = {
+            'page_no': page_no,
+            'page_size': constants.DME_GFS_MAX_PAGE_COUNT
+        }
+        request.update(param)
+        url = '/rest/fileservice/v1/dpc-administrators/query'
+        result = self.call(url, data=request, method='POST')
+        self._assert_result(result, 'get dpc administrators failed by page')
+        return result.get('administrators', [])
+
+    def delete_qos(self, qos_ids):
+        param = {
+            'ids': qos_ids
+        }
+        url = '/rest/storagepolicy/v1/qos/delete'
+        result = self.call(url, data=param, method='POST')
+        not_found_error_param = {
+            'special_code': constants.FILESYSTEM_NOT_EXIST,
+            'error_msg': 'Delete qos failed because of qos not exist',
+            'error_type': exception.ShareNotFound
+        }
+        self._assert_result(result, "Delete qos failed,", special_error_code_param=not_found_error_param)
+        return result.get('task_id')
+
+    def update_nfs_share(self, share_id, param):
+        url = '/rest/fileservice/v2/nfs-shares/{0}'.format(share_id)
+        result = self.call(url, data=param, method='PUT')
+        self._assert_result(result, 'update nfs share failed')
+        return result.get('task_id')
+
+    def allow_access_for_nfs(self, share_id, access_to, access_level):
+        access_value = 'read' if access_level == 'ro' else 'read_and_write'
+        param = {
+            "nfs_share_client_addition": [
+                {
+                    "name": access_to,
+                    "permission": access_value,
+                    "write_mode": "synchronization",
+                    "permission_constraint": "no_all_squash",
+                    "root_permission_constraint": "no_root_squash",
+                    "source_port_verification": "insecure"
+                }
+            ],
+            "character_encoding": self.driver_config.nfs_charset
+        }
+
+        return self.update_nfs_share(share_id, param)
+
+    def deny_access_for_nfs(self, share_id, access_to, nfs_share_client_id):
+        param = {
+            "description": "",
+            "nfs_share_client_addition": [],
+            "nfs_share_client_modification": [],
+            "nfs_share_client_deletion": [
+                {
+                    "name": access_to,
+                    "nfs_share_client_id_in_storage": nfs_share_client_id
+                }
+            ],
+            "character_encoding": self.driver_config.nfs_charset,
+            "show_snapshot_enable": True
+        }
+
+        return self.update_nfs_share(share_id, param)
+
+    def get_nfs_share(self, param):
+        return self.get_total_data_by_offset(self.get_nfs_share_by_page, param)
+
+    def get_nfs_share_by_page(self, page_no, param):
+        request = {
+            'page_no': page_no,
+            'page_size': constants.DME_GFS_MAX_PAGE_COUNT
+        }
+        request.update(param)
+        url = '/rest/fileservice/v1/nfs-shares/query'
+        result = self.call(url, data=request, method='POST')
+        self._assert_result(result, 'get nfs share failed by page')
+        return result.get('nfs_share_info_list', [])
+
+    def get_dpc_share(self, param):
+        return self.get_total_data_by_offset(self.get_dpc_share_by_page, param)
+
+    def get_dpc_share_by_page(self, page_no, param):
+        request = {
+            'page_no': page_no,
+            'page_size': constants.DME_GFS_MAX_PAGE_COUNT
+        }
+        request.update(param)
+        url = '/rest/fileservice/v1/dpc-shares/query'
+        result = self.call(url, data=request, method='POST')
+        self._assert_result(result, 'get dpc share failed by page')
+        return result.get('data', [])
+
+    def get_nfs_share_clients(self, param):
+        return self.get_total_data_by_offset(self.get_nfs_share_clients_by_page, param)
+
+    def get_nfs_share_clients_by_page(self, page_no, param):
+        request = {
+            'page_no': page_no,
+            'page_size': constants.DME_GFS_MAX_PAGE_COUNT
+        }
+        request.update(param)
+        url = '/rest/fileservice/v2/nfs-auth-clients/query'
+        result = self.call(url, data=request, method='POST')
+        self._assert_result(result, 'get nfs share clients failed by page')
+        return result.get('auth_client_list', [])
 
     def _get_gfs_capacities_info(self, offset, cluster_name):
         gfs_query_param = {

@@ -308,8 +308,10 @@ class BasePlugin(object):
         :return:
         """
         metadata_tier_value = self.share_metadata.get(tier_param)
+        # when manila tier switch is on, share_tier_strategy is a object instance
+        # when manila tier switch is off, share_tier_strategy is None
         share_tier_strategy = self.share.get('share_tier_strategy', {})
-        if not isinstance(share_tier_strategy, dict):
+        if share_tier_strategy is None:
             share_tier_strategy = {}
         share_tier_value = share_tier_strategy.get(tier_param)
         tier_value = share_tier_value if metadata_tier_value is None else metadata_tier_value
@@ -410,21 +412,19 @@ class BasePlugin(object):
                                                   hot_data_size, pool_qos_param):
         """
         Get the QoS coefficient according to the protocol and tier.
-        Parameters:
-            share_size
-            cold_data_size
-            hot_data_size
-            pool_qos_param
         Return value:
         Returns a dictionary that includes the QoS coefficients and their corresponding sizes.
         """
-        if hot_data_size is None and cold_data_size is None:
-            if len(pool_qos_param) != 1:
-                error_msg = "No tier and multi-protocol resource pools can only config one pool_type."
-                LOG.error(error_msg)
-                raise exception.BadConfigurationException(error_msg)
-            for _, coefficient in pool_qos_param.items():
-                return {coefficient: share_size}
+        # hot_data_size and clod_data_size value all equal to 0(manila tier switch is off)
+        if not hot_data_size and not cold_data_size:
+            # intelligent computing one or two, only one type of resource pool if configured
+            if len(pool_qos_param) == 1:
+                for coefficient in pool_qos_param.values():
+                    return {coefficient: share_size}
+            # intelligent computing three, A resource pool is configured with three types.
+            # When the Manila tier switch is off, all capacities are seen as SSD capacity based
+            # on the highest priority principle.
+            hot_data_size = share_size
 
         qos_coefficient_info = {}
         self._set_qos_coefficient(
