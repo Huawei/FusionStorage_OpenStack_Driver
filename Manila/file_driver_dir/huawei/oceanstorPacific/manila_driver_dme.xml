@@ -1,0 +1,28 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<config>
+    <Storage>
+        <Product>DME_FILESYSTEM</Product>
+        <RestURL>https://127.0.0.1:26335</RestURL>
+        <UserName>testUser</UserName>
+        <UserPassword>xxxx</UserPassword>
+        <Sn>xxxx</Sn>
+        <ZoneId>0</ZoneId>
+        <SecurityMode>unix</SecurityMode>
+    </Storage>
+    <Filesystem>
+        <StoragePool>0</StoragePool>
+        <VStoreId>0</VStoreId>
+    </Filesystem>
+    <DPC>
+        <Charset>UTF_8</Charset>
+        <User>testUser</User>
+        <Permission>read_and_write</Permission>
+    </DPC>
+    <NFS>
+        <Charset>utf-8</Charset>
+    </NFS>
+    <QOS>
+        <Max_IOPS>100</Max_IOPS>
+        <Max_BandWidth>1</Max_BandWidth>
+    </QOS>
+</config>

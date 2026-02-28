@@ -188,7 +188,18 @@ class DriverConfig(object):
             self._rollback_rate,
             self._third_platform,
             self._share_backend_pools_type,
-            self._check_ssl_two_way_config_valid
+            self._check_ssl_two_way_config_valid,
+            self._storage_sn,
+            self._zone_id,
+            self._vstore_id,
+            self._pool_raw_id,
+            self._security_mode,
+            self._nfs_charset,
+            self._dpc_charset,
+            self._dpc_user,
+            self._dpc_permission,
+            self._qos_max_iops,
+            self._qos_max_band_width
         )
 
         for f in attr_funcs:
@@ -483,3 +494,96 @@ class DriverConfig(object):
         if self.config.safe_get('storage_key_pwd'):
             mutual_authentication["storage_key_pwd"] = self.config.safe_get('storage_key_pwd')
         setattr(self.config, 'mutual_authentication', mutual_authentication)
+    
+    def _storage_sn(self, xml_root):
+        label = 'Storage/Sn'
+        text = xml_root.findtext(label)
+        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
+            self.check_config_exist(text, label)
+            setattr(self.config, 'storage_sn', text.strip())
+
+    def _zone_id(self, xml_root):
+        label = 'Storage/ZoneId'
+        text = xml_root.findtext(label)
+        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
+            if not text or not text.strip():
+                setattr(self.config, 'zone_raw_id', '')
+            else:
+                setattr(self.config, 'zone_raw_id', text.strip())
+
+    def _vstore_id(self, xml_root):
+        label = 'Filesystem/VStoreId'
+        text = xml_root.findtext(label)
+        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
+            self.check_config_exist(text, label)
+            setattr(self.config, 'vstore_raw_id', text.strip())
+
+    def _pool_raw_id(self, xml_root):
+        label = 'Filesystem/StoragePool'
+        text = xml_root.findtext(label)
+        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
+            self.check_config_exist(text, label)
+            setattr(self.config, 'pool_raw_id', text.strip())
+
+    def _security_mode(self, xml_root):
+        label = 'Storage/SecurityMode'
+        text = xml_root.findtext(label)
+        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
+            if not text or not text.strip():
+                setattr(self.config, 'security_mode', constants.DME_DEFAULT_SECURITY_MODE)
+            else:
+                setattr(self.config, 'security_mode', text.strip())
+
+    def _nfs_charset(self, xml_root):
+        label = 'NFS/Charset'
+        text = xml_root.findtext(label)
+        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
+            if not text or not text.strip():
+                setattr(self.config, 'nfs_charset', constants.DME_DEFAULT_NFS_CHARSET)
+            else:
+                setattr(self.config, 'nfs_charset', text.strip())
+
+    def _dpc_charset(self, xml_root):
+        label = 'DPC/Charset'
+        text = xml_root.findtext(label)
+        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
+            if not text or not text.strip():
+                setattr(self.config, 'dpc_charset', constants.DME_DEFAULT_DPC_CHARSET)
+            else:
+                setattr(self.config, 'dpc_charset', text.strip())
+
+    def _dpc_user(self, xml_root):
+        label = 'DPC/User'
+        text = xml_root.findtext(label)
+        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
+            if not text or not text.strip():
+                setattr(self.config, 'dpc_user', '')
+            else:
+                setattr(self.config, 'dpc_user', text.strip())
+
+    def _dpc_permission(self, xml_root):
+        label = 'DPC/Permission'
+        text = xml_root.findtext(label)
+        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
+            if not text or not text.strip():
+                setattr(self.config, 'dpc_user_permission', constants.DME_DEFAULT_DPC_PERMISSION)
+            else:
+                setattr(self.config, 'dpc_user_permission', text.strip())
+
+    def _qos_max_iops(self, xml_root):
+        label = 'QOS/Max_IOPS'
+        text = xml_root.findtext(label)
+        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
+            if not text or not text.strip():
+                setattr(self.config, 'max_iops', constants.DME_DEFAULT_MAX_IOPS)
+            else:
+                setattr(self.config, 'max_iops', text.strip())
+
+    def _qos_max_band_width(self, xml_root):
+        label = 'QOS/Max_BandWidth'
+        text = xml_root.findtext(label)
+        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
+            if not text or not text.strip():
+                setattr(self.config, 'max_bandwidth', constants.DME_DEFAULT_MAX_BAND_WIDTH)
+            else:
+                setattr(self.config, 'max_bandwidth', text.strip())
