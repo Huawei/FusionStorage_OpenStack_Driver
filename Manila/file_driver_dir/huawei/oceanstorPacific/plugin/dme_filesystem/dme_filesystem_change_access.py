@@ -28,12 +28,14 @@ class DmeChangeAccess(CommunityChangeAccess):
     def __init__(self, client, share=None, driver_config=None, context=None, storage_features=None):
         super(DmeChangeAccess, self).__init__(client, share, driver_config, context, storage_features)
         self.share_parent_id = self._get_share_parent_id()
+        self.managed_storage_type = []
 
     @staticmethod
     def get_impl_type():
         return constants.PLUGIN_DME_FILESYSTEM_IMPL, None
 
     def update_access(self, access_rules, add_rules, delete_rules):
+        self._check_share_tier_policy_and_set_managed_storage(self.managed_storage_type)
         if add_rules:
             self._get_share_access_proto(add_rules, True)
         if delete_rules:
@@ -52,6 +54,27 @@ class DmeChangeAccess(CommunityChangeAccess):
         self._get_share_access_proto([access], False)
         self._get_share_id()
         self._classify_rules([access], 'deny')
+
+    def query_primary_direction_nfs_shares(self):
+        param = None
+        if 'A800' in self.managed_storage_type:
+            file_system = self.client.query_specified_file_system(self._build_query_param())
+            param = {'fs_id': file_system.get('id')}
+        elif 'Pacific' in self.managed_storage_type:
+            namespace = self.client.query_specified_namespaces(self._build_query_namespace_param())
+            param = {'namespace_id': namespace.get('id')}
+        if param is None:
+            return []
+        nfs_shares = self.client.get_nfs_share(param)
+        nfs_shares = [share for share in nfs_shares if not share.get('owning_dtree_id')]
+        return nfs_shares
+
+    def query_secondary_direction_nfs_shares(self):
+        nfs_shares = []
+        if 'A800' in self.managed_storage_type:
+            dtree = self.client.query_specified_dtree(self._build_query_param())
+            nfs_shares = self.client.get_nfs_share({'owning_dtree_id': dtree.get('id')})
+        return nfs_shares
 
     def _classify_rules(self, access_rules, action):
         access_type_key = 'access_type'
@@ -74,7 +97,8 @@ class DmeChangeAccess(CommunityChangeAccess):
                     err_msg = _('Unsupported level of access was provided - {0}'.format(access_level))
                     raise exception.InvalidShareAccess(reason=err_msg)
 
-                task_id = self.client.allow_access_for_nfs(self.nfs_share_id, access_to, access_level)
+                task_id = self.client.allow_access_for_nfs(self.nfs_share_id, access_to, access_level,
+                                                           self.managed_storage_type[0])
                 self.client.wait_task_until_complete(task_id, query_interval_seconds=0.5)
 
         elif action == 'deny':
@@ -88,31 +112,38 @@ class DmeChangeAccess(CommunityChangeAccess):
                 access_to = self.standard_ipaddr(access.get('access_to'))
                 if access_to in nfs_share_clients:
                     task_id = self.client.deny_access_for_nfs(
-                        self.nfs_share_id, access_to, nfs_share_clients[access_to])
+                        self.nfs_share_id, access_to, nfs_share_clients[access_to], self.managed_storage_type[0])
                     self.client.wait_task_until_complete(task_id, query_interval_seconds=0.5)
                 else:
                     LOG.info(_("The access_to {0} does not exist").format(access_to))
 
     def _build_query_param(self):
         return {
-            'storage_id': self.driver_config.storage_id,
-            'zone_id': self.driver_config.zone_id if self.driver_config.zone_id else self.driver_config.storage_id,
-            'vstore_raw_id': self.driver_config.vstore_raw_id,
+            'storage_id': self.driver_config.A800.storage_id,
+            'zone_id': (
+                self.driver_config.A800.zone_id
+                if self.driver_config.A800.zone_id
+                else self.driver_config.A800.storage_id
+            ),
+            'vstore_raw_id': self.driver_config.A800.vstore_raw_id,
             'name': 'share-' + self.share.get('share_id')
         }
 
     def _get_share_id(self):
-        param = self._build_query_param()
         if not self.share_parent_id:
-            file_system = self.client.query_specified_file_system(param)
-            nfs_shares = self.client.get_nfs_share({'fs_id': file_system.get('id')})
-            nfs_shares = [share for share in nfs_shares if not share.get('owning_dtree_id')]
+            nfs_shares = self.query_primary_direction_nfs_shares()
         else:
-            dtree = self.client.query_specified_dtree(param)
-            nfs_shares = self.client.get_nfs_share({'owning_dtree_id': dtree.get('id')})
+            nfs_shares = self.query_secondary_direction_nfs_shares()
 
         if len(nfs_shares) > 1 or len(nfs_shares) == 0:
             err_msg = _("Expected at most 1 nfs share, but got {0}.").format(len(nfs_shares))
             raise exception.InvalidShare(reason=err_msg)
 
         self.nfs_share_id = nfs_shares[0].get('id')
+
+    def _build_query_namespace_param(self):
+        return {
+            'storage_id': self.driver_config.Pacific.storage_id,
+            'vstore_raw_id': self.driver_config.Pacific.vstore_raw_id,
+            'name': 'share-' + self.share.get('share_id')
+        }

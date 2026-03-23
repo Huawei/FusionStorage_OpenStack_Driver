@@ -5,24 +5,31 @@
         <RestURL>https://127.0.0.1:26335</RestURL>
         <UserName>testUser</UserName>
         <UserPassword>xxxx</UserPassword>
+    </Storage>
+    <A800>
         <Sn>xxxx</Sn>
         <ZoneId>0</ZoneId>
         <SecurityMode>unix</SecurityMode>
-    </Storage>
-    <Filesystem>
         <StoragePool>0</StoragePool>
         <VStoreId>0</VStoreId>
-    </Filesystem>
-    <DPC>
-        <Charset>UTF_8</Charset>
-        <User>testUser</User>
-        <Permission>read_and_write</Permission>
-    </DPC>
-    <NFS>
-        <Charset>utf-8</Charset>
-    </NFS>
-    <QOS>
-        <Max_IOPS>100</Max_IOPS>
-        <Max_BandWidth>1</Max_BandWidth>
-    </QOS>
+        <ClusterDomainName>nfs-ip</ClusterDomainName>
+        <DPC>
+            <Charset>UTF_8</Charset>
+            <User>testUser</User>
+            <Permission>read_and_write</Permission>
+            <MountOption>cid={wwn}</MountOption>
+        </DPC>
+        <NFS>
+            <Charset>utf-8</Charset>
+        </NFS>
+    </A800>
+    <Pacific>
+        <Sn>xxxx</Sn>>
+        <StoragePool>0</StoragePool>
+        <VStoreId>0</VStoreId>
+        <ClusterDomainName>nfs-ip</ClusterDomainName>
+        <NFS>
+            <Charset>utf-8</Charset>
+        </NFS>
+    </Pacific>
 </config>

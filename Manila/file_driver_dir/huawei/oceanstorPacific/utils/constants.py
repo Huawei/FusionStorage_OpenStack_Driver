@@ -361,3 +361,6 @@ CONF_STORAGE_KEY_FILEPATH = "storage_key_filepath"
 CONF_STORAGE_CERT_FILEPATH = "storage_cert_filepath"
 CONF_STORAGE_SSL_TWO_WAY_AUTH = "storage_ssl_two_way_auth"
 CONF_STORAGE_KEY_PWD = "storage_key_pwd"
+
+MOUNT_OPTION_ERR_MSG = ("the allowed character set: letters, numbers, periods, colons, slashes, tabs, spaces, hyphens, "
+                        "underscores, comma, equal sign, curly brackets, square brackets.")

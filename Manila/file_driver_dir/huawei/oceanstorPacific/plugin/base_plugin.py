@@ -254,6 +254,35 @@ class BasePlugin(object):
             LOG.info("Can not get share metadata, return {}")
             return {}
 
+    def _check_share_tier_policy_and_set_managed_storage(self, managed_storage_type):
+        share_tier_strategy = self.share.get('share_tier_strategy')
+        if share_tier_strategy is None:
+            err_msg = ("Create share({0}) error, because can't "
+                        "get the share_tier_strategy...".format(self.share.get('id')))
+            raise exception.InvalidInput(err_msg)
+
+        if share_tier_strategy['hot_data_size'] > 0 and share_tier_strategy['cold_data_size'] == 0:
+            if hasattr(self.driver_config, 'A800') and self.driver_config.A800:
+                managed_storage_type.append('A800')
+            else:
+                raise exception.InvalidInput(
+                    "Create share({0}) error, config of a800 is not exist".format(self.share.get('id')))
+
+        if share_tier_strategy['hot_data_size'] == 0 and share_tier_strategy['cold_data_size'] > 0:
+            if hasattr(self.driver_config, 'Pacific') and self.driver_config.Pacific:
+                managed_storage_type.append('Pacific')
+            else:
+                raise exception.InvalidInput(
+                    "Create share({0}) error, config of pacific is not exist".format(self.share.get('id')))
+
+        if share_tier_strategy['hot_data_size'] > 0 and share_tier_strategy['cold_data_size'] > 0:
+            raise exception.InvalidInput(
+                "Create share({0}) error, not support create gfs".format(self.share.get('id')))
+
+        if share_tier_strategy['hot_data_size'] == 0 and share_tier_strategy['cold_data_size'] == 0:
+            raise exception.InvalidInput(
+                "Create share({0}) error, not support current config".format(self.share.get('id')))
+
     def _get_share_type_extra_specs(self):
         if self.share is None:
             return {}
