@@ -445,6 +445,16 @@ class DMEClient(RestClient):
 
         return file_systems[0]
 
+    def query_namespaces(self, param):
+        return self.get_total_data_by_offset(self.query_namespace_by_page, param)
+
+    def query_specified_namespaces(self, param):
+        namespaces = self.query_namespaces(param)
+        if not namespaces or len(namespaces) != constants.DME_DATA_COUNT_ONE:
+            return {}
+
+        return namespaces[0]
+
     def query_specified_dtree(self, param):
         dtrees = self.get_dtrees(param)
         if not dtrees or len(dtrees) != constants.DME_DATA_COUNT_ONE:
@@ -471,6 +481,16 @@ class DMEClient(RestClient):
 
     def get_file_systems(self, param):
         return self.get_total_data_by_offset(self.get_file_systems_by_page, param)
+
+    def query_namespace_by_page(self, page_no, param):
+        request = {
+            'page_no': page_no,
+            'page_size': constants.DME_GFS_MAX_PAGE_COUNT
+        }
+        request.update(param)
+        result = self.call('/rest/fileservice/v1/namespaces/query', data=request, method='POST')
+        self._assert_result(result, 'get namespace failed by page')
+        return result.get('namespace_list', [])
 
     def get_file_systems_by_page(self, page_no, param):
         request = {
@@ -566,6 +586,20 @@ class DMEClient(RestClient):
         self._assert_result(result, "Delete file system failed,", special_error_code_param=not_found_error_param)
         return result.get('task_id')
 
+    def delete_namespaces(self, namespace_ids):
+        param = {
+            'namespace_ids': namespace_ids
+        }
+        url = '/rest/fileservice/v1/namespaces/delete'
+        result = self.call(url, data=param, method='POST')
+        not_found_error_param = {
+            'special_code': constants.FILESYSTEM_NOT_EXIST,
+            'error_msg': 'Delete filesystem failed because of filesystem not exist',
+            'error_type': exception.ShareNotFound
+        }
+        self._assert_result(result, "Delete namespaces failed,", special_error_code_param=not_found_error_param)
+        return result.get('task_id')
+
     def delete_dtree(self, dtree_ids):
         param = {
             'dtree_ids': dtree_ids
@@ -626,10 +660,12 @@ class DMEClient(RestClient):
         }
         request.update(param)
         zone_id = param.get('zone_id')
-        if zone_id is not None and zone_id:
-            url = '/rest/storagemgmt/v1/storagepools/query'
-        else:
+        # zone_id为A800才有的属性，Pacific存储池不需要配置zone_raw_id,
+        # 此时zone_id的值为None, A800未配置zone_raw_id时，此时zone_id为’‘
+        if zone_id == '':
             url = '/rest/storagemgmt/v1/hyperscale-pools/query'
+        else:
+            url = '/rest/storagemgmt/v1/storagepools/query'
         result = self.call(url, data=request, method='POST')
         self._assert_result(result, 'get storage pools failed by page')
         return result.get('datas', result.get('data', []))
@@ -663,6 +699,13 @@ class DMEClient(RestClient):
         result = self.call(url, data=param, method='POST')
         LOG.info("call create fs, the result is %s", result)
         self._assert_result(result, "create file system failed")
+        return result.get('task_id')
+
+    def create_namespace(self, param):
+        url = '/rest/fileservice/v1/namespaces'
+        result = self.call(url, param, method='POST')
+        LOG.info("call create namespace, the result is %s", result)
+        self._assert_result(result, "create name space failed")
         return result.get('task_id')
 
     def get_storages(self, param):
@@ -729,9 +772,10 @@ class DMEClient(RestClient):
         self._assert_result(result, 'update nfs share failed')
         return result.get('task_id')
 
-    def allow_access_for_nfs(self, share_id, access_to, access_level):
+    def allow_access_for_nfs(self, share_id, access_to, access_level, attr_name):
         access_value = 'read' if access_level == 'ro' else 'read_and_write'
         param = {
+            "description": "",
             "nfs_share_client_addition": [
                 {
                     "name": access_to,
@@ -742,12 +786,12 @@ class DMEClient(RestClient):
                     "source_port_verification": "insecure"
                 }
             ],
-            "character_encoding": self.driver_config.nfs_charset
+            "character_encoding": getattr(self.driver_config, attr_name).nfs_charset
         }
 
         return self.update_nfs_share(share_id, param)
 
-    def deny_access_for_nfs(self, share_id, access_to, nfs_share_client_id):
+    def deny_access_for_nfs(self, share_id, access_to, nfs_share_client_id, attr_name):
         param = {
             "description": "",
             "nfs_share_client_addition": [],
@@ -758,7 +802,7 @@ class DMEClient(RestClient):
                     "nfs_share_client_id_in_storage": nfs_share_client_id
                 }
             ],
-            "character_encoding": self.driver_config.nfs_charset,
+            "character_encoding": getattr(self.driver_config, attr_name).nfs_charset,
             "show_snapshot_enable": True
         }
 
