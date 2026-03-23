@@ -84,12 +84,12 @@ class PluginFactory(object):
         if self.impl_type and self.impl_type == constants.PLUGIN_DME_FILESYSTEM_IMPL:
             LOG.info("********************set config after login********************")
             storage_id_by_sn = self._get_storage_id_by_sn()
-            zone_id = self._get_zone_id_by_storage_id(storage_id_by_sn)
+            zone_id = self._get_zone_id_by_storage_id(storage_id_by_sn.get('a800'))
             vstore_id = self._get_vstore_id(storage_id_by_sn, zone_id)
-            self._get_dpc_user_id_by_name(storage_id_by_sn, vstore_id, zone_id)
+            self._get_dpc_user_id_by_name(storage_id_by_sn.get('a800'), vstore_id.get('a800'), zone_id)
 
     def _get_dpc_user_id_by_name(self, storage_id_by_sn, vstore_id, zone_id):
-        dpc_user = self.driver_config.config.dpc_user
+        dpc_user = self.driver_config.config.A800.dpc_user if self.driver_config.config.A800 else ''
         if not dpc_user:
             return
         param = {
@@ -103,15 +103,27 @@ class PluginFactory(object):
         filtered_user = next((user for user in users if user.get('name') == dpc_user), None)
         if filtered_user:
             user_id = filtered_user.get('id')
-            setattr(self.driver_config.config, 'dpc_user_id', user_id)
+            setattr(self.driver_config.config.A800, 'dpc_user_id', user_id)
             return
         raise ValueError("Failed get dpc user by storage_id:%s ,vstore_id:%s, and name:%s", storage_id_by_sn,
                          vstore_id, dpc_user)
 
     def _get_vstore_id(self, storage_id_by_sn, zone_id):
-        vstore_raw_id = self.driver_config.config.vstore_raw_id
+        storage_vstore_id = dict()
+        if self.driver_config.config.A800:
+            a800_vstore_raw_id = self.driver_config.config.A800.vstore_raw_id
+            storage_vstore_id['a800'] = self._get_vstore_id_by_storage_id(
+                storage_id_by_sn.get('a800'), a800_vstore_raw_id, self.driver_config.config.A800, zone_id)
+        if self.driver_config.config.Pacific:
+            pacific_vstore_raw_id = self.driver_config.config.Pacific.vstore_raw_id
+            storage_vstore_id['pacific'] = self._get_vstore_id_by_storage_id(
+                storage_id_by_sn.get('pacific'), pacific_vstore_raw_id, self.driver_config.config.Pacific
+            )
+        return storage_vstore_id
+
+    def _get_vstore_id_by_storage_id(self, storage_id, vstore_raw_id, storage_config, zone_id=None):
         param = {
-            "storage_id": storage_id_by_sn,
+            "storage_id": storage_id,
             "raw_id": vstore_raw_id
         }
         if zone_id:
@@ -119,38 +131,61 @@ class PluginFactory(object):
         vstores = self.client.get_vstores(param)
         if vstores and len(vstores) == 1:
             vstore_id = vstores[0].get("id")
-            setattr(self.driver_config.config, 'vstore_id', vstore_id)
-            LOG.info("success get vstore_id:%s by storage id:%s and raw id:%s", vstore_id, storage_id_by_sn,
+            setattr(storage_config, 'vstore_id', vstore_id)
+            LOG.info("success get vstore_id:%s by storage id:%s and raw id:%s", vstore_id, storage_id,
                      vstore_raw_id)
             return vstore_id
-        raise ValueError("Failed get vstore_id by storage id:%s and raw id:%s", storage_id_by_sn, vstore_raw_id)
+        raise ValueError("Failed get vstore_id by storage id:%s and raw id:%s" % (storage_id, vstore_raw_id))
 
     def _get_zone_id_by_storage_id(self, storage_id_by_sn):
-        zone_raw_id = self.driver_config.config.zone_raw_id
+        if not self.driver_config.config.A800:
+            return None
+        zone_raw_id = self.driver_config.config.A800.zone_raw_id
         if storage_id_by_sn and zone_raw_id:
             zones = self.client.get_cluster_zones(storage_id_by_sn)
             filtered_zone = next((zone for zone in zones if zone.get('zone_raw_id') == zone_raw_id), None)
             if filtered_zone:
                 zone_native_id = filtered_zone.get('native_id')
-                setattr(self.driver_config.config, 'zone_id', zone_native_id)
-                LOG.info("success get zone:%s by storage id:%s and zone id:%s", zone_native_id, storage_id_by_sn,
-                         zone_raw_id)
+                zone_wwn = filtered_zone.get('wwn')
+                setattr(self.driver_config.config.A800, 'zone_id', zone_native_id)
+                setattr(self.driver_config.config.A800, 'storage_wwn', zone_wwn)
+                LOG.info("success get zone:%s by storage id:%s, zone id:%s and zone wwn:%s",
+                         zone_native_id, storage_id_by_sn, zone_raw_id, zone_wwn)
                 return zone_native_id
             # 配置了zone_raw_id但是未查询到对应的zone,抛异常
             raise ValueError("Failed get zone by storage id:%s and zone id:%s", storage_id_by_sn, zone_raw_id)
-        setattr(self.driver_config.config, 'zone_id', '')
+        setattr(self.driver_config.config.A800, 'zone_id', '')
         return None
 
     def _get_storage_id_by_sn(self):
-        storage_sn = self.driver_config.config.storage_sn
+        a800_storage_sn = self.driver_config.config.A800.storage_sn \
+            if self.driver_config.config.A800 else None
+        pacific_storage_sn = self.driver_config.config.Pacific.storage_sn \
+            if self.driver_config.config.Pacific else None
+        storage_id_enum = {}
         storages = self.client.get_storages(None)
-        filtered_storage = next((storage for storage in storages if storage.get('sn') == storage_sn), None)
-        if filtered_storage:
-            storage_id = filtered_storage.get('id')
-            setattr(self.driver_config.config, 'storage_id', storage_id)
-            LOG.info("success get storage id:%s by sn:%s", storage_id, storage_sn)
-            return storage_id
-        raise ValueError("Failed get storage id by sn: %s" % storage_sn)
+        for storage in storages:
+            storage_id = storage.get('id')
+            storage_wwn = storage.get('wwn')
+            if self.driver_config.config.A800 and storage.get('sn') == a800_storage_sn:
+                storage_id_enum['a800'] = storage_id
+                setattr(self.driver_config.config.A800, 'storage_id', storage_id)
+                setattr(self.driver_config.config.A800, 'storage_wwn', storage_wwn)
+                LOG.info("success get storage id:%s by a800 storage sn:%s, wwn:%s",
+                         storage_id, a800_storage_sn, storage_wwn)
+            if self.driver_config.config.Pacific and storage.get('sn') == pacific_storage_sn:
+                storage_id_enum['pacific'] = storage_id
+                setattr(self.driver_config.config.Pacific, 'storage_id', storage_id)
+                setattr(self.driver_config.config.Pacific, 'storage_wwn', storage_wwn)
+                LOG.info("success get storage id:%s by Pacific storage sn:%s, wwn:%s",
+                         storage_id, a800_storage_sn, storage_wwn)
+
+        if a800_storage_sn and 'a800' not in storage_id_enum:
+            raise ValueError("Failed get storage id by a800 sn: %s" % a800_storage_sn)
+        if pacific_storage_sn and 'pacific' not in storage_id_enum:
+            raise ValueError("Failed get storage id by Pacific sn: %s" % pacific_storage_sn)
+
+        return storage_id_enum
 
     def _get_client(self):
         product = self.config.product

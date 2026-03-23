@@ -22,10 +22,116 @@ from oslo_log import log
 
 from manila import exception
 from manila.i18n import _
-from . import constants
+from . import constants, driver_utils
 from . import cipher
 
 LOG = log.getLogger(__name__)
+
+
+class StorageConfig(object):
+    """
+    Storage Specific configure
+    """
+    def __init__(self, storage_type, xml_root, default_value):
+        self.xml_root = xml_root
+        self.storage_type = storage_type
+        self.storage_sn = None
+        self.zone_raw_id = None
+        self.security_mode = None
+        self.pool_raw_id = None
+        self.vstore_raw_id = None
+        self.domain = None
+        self.dpc_charset = None
+        self.dpc_user = None
+        self.dpc_user_permission = None
+        self.dpc_mount_option = None
+        self.nfs_charset = None
+        self.nfs_mount_option = None
+        self.max_iops = None
+        self.max_band_width = None
+        self.storage_id = None
+        self.storage_wwn = None
+        self.zone_id = None
+        self.vstore_id = None
+        self.dpc_user_id = None
+        self.default_value = default_value
+        self.storage_config = self._get_storage_config()
+
+    @staticmethod
+    def _set_optional_value(config_label, text, default_value=''):
+        if not text or not text.strip():
+            return default_value
+        else:
+            return text.strip()
+
+    @staticmethod
+    def _set_mount_option_value(config_label, text):
+        if not text or not text.strip():
+            return ''
+        if not driver_utils.validate_mount_parameters(text):
+            err_msg = '%s is invalid. %s' % (config_label, constants.MOUNT_OPTION_ERR_MSG)
+            LOG.error(err_msg)
+            raise exception.BadConfigurationException(reason=err_msg)
+        return text.strip()
+
+    @staticmethod
+    def _check_config_exist(config_label, text):
+        if not text or not text.strip():
+            msg = _("Config file invalid. %s must be set.") % config_label
+            LOG.error(msg)
+            raise exception.BadConfigurationException(reason=msg)
+
+    def set_storage_config(self):
+        if not self.xml_root.find(self.storage_type):
+            return
+        for config, config_info in self.storage_config.items():
+            config_label = '/'.join([self.storage_type, config])
+            text = self.xml_root.findtext(config_label)
+            config_func = config_info['func']
+            if 'default' in config_info:
+                config_value = config_func(config_label, text, config_info['default'])
+            else:
+                config_value = config_func(config_label, text)
+            setattr(self, config_info['attr'], config_value)
+
+    def _set_positive_value(self, config_label, text):
+        self._check_config_exist(config_label, text)
+        return text.strip()
+
+    def _get_storage_config(self):
+        return {
+            'Sn': {'attr': 'storage_sn', 'func': self._set_positive_value},
+            'ZoneId': {'attr': 'zone_raw_id', 'func': self._set_optional_value},
+            'SecurityMode': {
+                'attr': 'security_mode', 'func': self._set_optional_value,
+                'default': constants.DME_DEFAULT_SECURITY_MODE
+            },
+            'StoragePool': {'attr': 'pool_raw_id', 'func': self._set_positive_value},
+            'VStoreId': {'attr': 'vstore_raw_id', 'func': self._set_positive_value},
+            'ClusterDomainName': {'attr': 'domain', 'func': self._set_optional_value},
+            'DPC/Charset': {
+                'attr': 'dpc_charset', 'func': self._set_optional_value,
+                'default': constants.DME_DEFAULT_DPC_CHARSET
+            },
+            'DPC/User': {'attr': 'dpc_user', 'func': self._set_optional_value},
+            'DPC/Permission': {
+                'attr': 'dpc_user_permission', 'func': self._set_optional_value,
+                'default': constants.DME_DEFAULT_DPC_PERMISSION
+            },
+            'DPC/MountOption': {'attr': 'dpc_mount_option', 'func': self._set_mount_option_value},
+            'NFS/Charset': {
+                'attr': 'nfs_charset', 'func': self._set_optional_value,
+                'default': constants.DME_DEFAULT_NFS_CHARSET
+            },
+            'NFS/MountOption': {'attr': 'nfs_mount_option', 'func': self._set_mount_option_value},
+            'Qos/Max_IOPS': {
+                'attr': 'max_iops', 'func': self._set_optional_value,
+                'default': self.default_value.get('max_iops')
+            },
+            'Qos/MaxBandWidth': {
+                'attr': 'max_band_width', 'func': self._set_optional_value,
+                'default': self.default_value.get('max_band_width')
+            }}
 
 
 class DriverConfig(object):
@@ -183,23 +289,11 @@ class DriverConfig(object):
             self._hot_disk_type,
             self._warm_disk_type,
             self._cold_disk_type,
-            self._dpc_mount_options,
-            self._nfs_mount_options,
             self._rollback_rate,
             self._third_platform,
             self._share_backend_pools_type,
             self._check_ssl_two_way_config_valid,
-            self._storage_sn,
-            self._zone_id,
-            self._vstore_id,
-            self._pool_raw_id,
-            self._security_mode,
-            self._nfs_charset,
-            self._dpc_charset,
-            self._dpc_user,
-            self._dpc_permission,
-            self._qos_max_iops,
-            self._qos_max_band_width
+            self._set_storage_config
         )
 
         for f in attr_funcs:
@@ -245,8 +339,10 @@ class DriverConfig(object):
 
     def _nas_storage_pools(self, xml_root):
         text = xml_root.findtext('Filesystem/StoragePool')
-        self.check_config_exist(text, 'Filesystem/StoragePool')
+        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
+            return
 
+        self.check_config_exist(text, 'Filesystem/StoragePool')
         if self.config.product == constants.PRODUCT_PACIFIC:
             pool_is_digit_list = [pool_id.strip().isdigit() for pool_id in text.split(';')]
             if False in pool_is_digit_list:
@@ -360,20 +456,6 @@ class DriverConfig(object):
             raise exception.BadConfigurationException(reason=err_msg)
         else:
             setattr(self.config, 'cold_disk_type', text.strip())
-
-    def _dpc_mount_options(self, xml_root):
-        text = xml_root.findtext('DPC/MountOption')
-        if not text or not text.strip():
-            setattr(self.config, 'dpc_mount_option', '')
-        else:
-            setattr(self.config, 'dpc_mount_option', text.strip())
-
-    def _nfs_mount_options(self, xml_root):
-        text = xml_root.findtext('NFS/MountOption')
-        if not text or not text.strip():
-            setattr(self.config, 'nfs_mount_option', '')
-        else:
-            setattr(self.config, 'nfs_mount_option', text.strip())
 
     def _rollback_rate(self, xml_root):
         text = xml_root.findtext('Filesystem/RollbackRate')
@@ -494,96 +576,26 @@ class DriverConfig(object):
         if self.config.safe_get('storage_key_pwd'):
             mutual_authentication["storage_key_pwd"] = self.config.safe_get('storage_key_pwd')
         setattr(self.config, 'mutual_authentication', mutual_authentication)
-    
-    def _storage_sn(self, xml_root):
-        label = 'Storage/Sn'
-        text = xml_root.findtext(label)
-        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
-            self.check_config_exist(text, label)
-            setattr(self.config, 'storage_sn', text.strip())
 
-    def _zone_id(self, xml_root):
-        label = 'Storage/ZoneId'
-        text = xml_root.findtext(label)
-        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
-            if not text or not text.strip():
-                setattr(self.config, 'zone_raw_id', '')
+    def _set_storage_config(self, xml_root):
+        storage_type_info = {
+            'A800': {
+                'default_value': {
+                    'max_iops': constants.DME_DEFAULT_MAX_IOPS,
+                    'max_band_width': constants.DME_DEFAULT_MAX_BAND_WIDTH
+                }
+            },
+            'Pacific': {
+                'default_value': {
+                    'max_iops': constants.DME_DEFAULT_MAX_IOPS,
+                    'max_band_width': constants.DME_DEFAULT_MAX_BAND_WIDTH
+                }
+            }
+        }
+        for storage_type, type_info in storage_type_info.items():
+            if not xml_root.find(storage_type):
+                setattr(self.config, storage_type, None)
             else:
-                setattr(self.config, 'zone_raw_id', text.strip())
-
-    def _vstore_id(self, xml_root):
-        label = 'Filesystem/VStoreId'
-        text = xml_root.findtext(label)
-        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
-            self.check_config_exist(text, label)
-            setattr(self.config, 'vstore_raw_id', text.strip())
-
-    def _pool_raw_id(self, xml_root):
-        label = 'Filesystem/StoragePool'
-        text = xml_root.findtext(label)
-        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
-            self.check_config_exist(text, label)
-            setattr(self.config, 'pool_raw_id', text.strip())
-
-    def _security_mode(self, xml_root):
-        label = 'Storage/SecurityMode'
-        text = xml_root.findtext(label)
-        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
-            if not text or not text.strip():
-                setattr(self.config, 'security_mode', constants.DME_DEFAULT_SECURITY_MODE)
-            else:
-                setattr(self.config, 'security_mode', text.strip())
-
-    def _nfs_charset(self, xml_root):
-        label = 'NFS/Charset'
-        text = xml_root.findtext(label)
-        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
-            if not text or not text.strip():
-                setattr(self.config, 'nfs_charset', constants.DME_DEFAULT_NFS_CHARSET)
-            else:
-                setattr(self.config, 'nfs_charset', text.strip())
-
-    def _dpc_charset(self, xml_root):
-        label = 'DPC/Charset'
-        text = xml_root.findtext(label)
-        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
-            if not text or not text.strip():
-                setattr(self.config, 'dpc_charset', constants.DME_DEFAULT_DPC_CHARSET)
-            else:
-                setattr(self.config, 'dpc_charset', text.strip())
-
-    def _dpc_user(self, xml_root):
-        label = 'DPC/User'
-        text = xml_root.findtext(label)
-        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
-            if not text or not text.strip():
-                setattr(self.config, 'dpc_user', '')
-            else:
-                setattr(self.config, 'dpc_user', text.strip())
-
-    def _dpc_permission(self, xml_root):
-        label = 'DPC/Permission'
-        text = xml_root.findtext(label)
-        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
-            if not text or not text.strip():
-                setattr(self.config, 'dpc_user_permission', constants.DME_DEFAULT_DPC_PERMISSION)
-            else:
-                setattr(self.config, 'dpc_user_permission', text.strip())
-
-    def _qos_max_iops(self, xml_root):
-        label = 'QOS/Max_IOPS'
-        text = xml_root.findtext(label)
-        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
-            if not text or not text.strip():
-                setattr(self.config, 'max_iops', constants.DME_DEFAULT_MAX_IOPS)
-            else:
-                setattr(self.config, 'max_iops', text.strip())
-
-    def _qos_max_band_width(self, xml_root):
-        label = 'QOS/Max_BandWidth'
-        text = xml_root.findtext(label)
-        if self.config.product == constants.PRODUCT_DME_FILESYSTEM:
-            if not text or not text.strip():
-                setattr(self.config, 'max_bandwidth', constants.DME_DEFAULT_MAX_BAND_WIDTH)
-            else:
-                setattr(self.config, 'max_bandwidth', text.strip())
+                storage_config = StorageConfig(storage_type, xml_root, type_info.get('default_value'))
+                storage_config.set_storage_config()
+                setattr(self.config, storage_type, storage_config)

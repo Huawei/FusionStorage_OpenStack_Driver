@@ -16,6 +16,7 @@
 import math
 import os
 import random
+import re
 import zipfile
 import threading
 import time
@@ -202,6 +203,23 @@ def qos_calc_formula(share_size, qos_coefficient):
         int(qos_coefficient_list[0]) + int(qos_coefficient_list[1]) * share_size,
         int(qos_coefficient_list[2])
     ))
+
+
+def validate_mount_parameters(parameters):
+    """
+    Check whether the mount parameters contain invalid characters.
+    params:
+        parameters (str): Mount parameter string, Define the allowed character set: letters, numbers, periods, colons,
+        slashes, tabs, spaces, hyphens, underscores, etc.
+    return:
+        bool: If the parameter is valid, True is returned; otherwise, False is returned.
+    """
+    allowed_characters = r'^[a-zA-Z0-9.\:/\t\s_\-,=\{\}\[\]]*$'
+
+    if parameters is None or re.match(allowed_characters, parameters):
+        return True
+    else:
+        return False
 
 
 class MyThread(threading.Thread):
