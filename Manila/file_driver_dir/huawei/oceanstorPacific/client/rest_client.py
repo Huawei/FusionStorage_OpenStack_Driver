@@ -200,8 +200,8 @@ def do_retry(self, func, retry_interval, kwargs):
             return result
 
         status_code, error_code = self._error_code(res)
-        if any((error_code in self.relogin_codes,
-                status_code in self.relogin_codes)):
+        if any((str(error_code) in self.relogin_codes,
+                str(status_code) in self.relogin_codes)):
             LOG.warning("the error code is abnormal, "
                         "trying to retry, the url is %s,"
                         "result info is %s" % (full_url, result))

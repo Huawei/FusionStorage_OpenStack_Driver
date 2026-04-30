@@ -22,6 +22,10 @@
         <NFS>
             <Charset>utf-8</Charset>
         </NFS>
+        <Qos>
+            <Max_IOPS>100</Max_IOPS>
+            <MaxBandWidth>1</MaxBandWidth>
+        </Qos>
     </A800>
     <Pacific>
         <Sn>xxxx</Sn>>

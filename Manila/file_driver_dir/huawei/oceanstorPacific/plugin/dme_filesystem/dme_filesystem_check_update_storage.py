@@ -47,6 +47,7 @@ class DmeCheckUpdateStorage(CommunityCheckUpdateStorage):
             self._set_a800_share_usage(param, all_share_usages)
         if param.get('pacific') is not None:
             self._set_pacific_share_usage(param, all_share_usages)
+        LOG.info("All share usages is %s" % all_share_usages)
         return all_share_usages
 
     def check_service(self):
@@ -63,10 +64,13 @@ class DmeCheckUpdateStorage(CommunityCheckUpdateStorage):
             dedupe=False,
             thin_provisioning=True,
             compression=True,
-            snapshot_support=[True, False],
+            snapshot_support=[False, False],
             create_share_from_snapshot_support=[False, False],
-            revert_to_snapshot_support=[True, False],
-            acl_policy=constants.ACL_POLICY)
+            revert_to_snapshot_support=[False, False],
+            acl_policy=constants.ACL_POLICY,
+            storage_protocol='NFS_DPC',
+            share_proto='DPC'
+        )
 
         self._update_storage_pool_capabilities(pool_capabilities)
         data.update({'pools': [pool_capabilities]})
@@ -132,8 +136,7 @@ class DmeCheckUpdateStorage(CommunityCheckUpdateStorage):
     def _set_pacific_share_usage(self, param, all_share_usages):
         with ThreadPoolExecutor(max_workers=2) as executor:
             future_name_space = executor.submit(self.client.query_namespaces, param.get('pacific'))
-            future_fs_dtree = executor.submit(
-                self._get_dtrees_and_quotas, param.get('pacific'), self.driver_config.Pacific.vstore_id)
+            future_fs_dtree = executor.submit(self._get_dtrees_and_quotas, param.get('pacific'))
 
             name_spaces = future_name_space.result()
             ns_dtrees, ns_dtree_quotas = future_fs_dtree.result()
@@ -213,9 +216,12 @@ class DmeCheckUpdateStorage(CommunityCheckUpdateStorage):
                 'hard_limit': str(int(hard_limit)),
             }
 
-    def _get_dtrees_and_quotas(self, param, vstore_id):
+    def _get_dtrees_and_quotas(self, param, vstore_id=None):
         dtrees = self.client.get_dtrees(param)
-        dtrees = [dtree for dtree in dtrees if dtree.get('vstore_id') == vstore_id]
+        if vstore_id is not None:
+            dtrees = [dtree for dtree in dtrees if dtree.get('vstore_id') == vstore_id]
+        else:
+            dtrees = [dtree for dtree in dtrees]
         quotas = self._get_dtree_directory_quotas(param)
 
         return dtrees, quotas

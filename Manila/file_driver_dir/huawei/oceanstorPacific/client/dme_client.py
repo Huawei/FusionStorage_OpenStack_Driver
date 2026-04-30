@@ -459,7 +459,8 @@ class DMEClient(RestClient):
         dtrees = self.get_dtrees(param)
         if not dtrees or len(dtrees) != constants.DME_DATA_COUNT_ONE:
             err_msg = _("Expected at most 1 dtree, but got {0}.").format(len(dtrees))
-            raise exception.InvalidShare(reason=err_msg)
+            LOG.error(err_msg)
+            return {}
 
         return dtrees[0]
 
@@ -506,14 +507,15 @@ class DMEClient(RestClient):
     def get_file_system_by_name(self, param, name):
         file_systems = self.get_file_systems(param)
         if file_systems is None or len(file_systems) == 0:
-            raise exception.InvalidShare(reason="Can not get file systems.")
+            LOG.warning("Can not get file systems.")
+            return {}
         # 由于文件系统查询接口名称是模糊搜索,查询到的列表再通过 name 再精确过滤
         filtered_file_systems = [fs for fs in file_systems if fs.get('name') == name]
         # 检查过滤后的元素数量是否为 1
         if len(filtered_file_systems) != 1:
-            raise ValueError("Expected 1 file system with name '{}', but found {}.".format(
-                name, len(filtered_file_systems)
-            ))
+            LOG.warning("Expected 1 file system with name '{}', but found {}.".format(
+                name, len(filtered_file_systems)))
+            return {}
         return filtered_file_systems[0]
 
     def get_file_system_detail(self, fs_id):
@@ -524,7 +526,20 @@ class DMEClient(RestClient):
             'error_msg': 'get file system detail failed because of filesystem not exist',
             'error_type': exception.ShareNotFound
         }
-        self._assert_result(result, "Get file system detail failed,", special_error_code_param=not_found_error_param)
+        self._assert_result(result, "Get file system detail failed,",
+                            special_error_code_param=not_found_error_param)
+        return result
+
+    def get_namespace_detail(self, namespace_id):
+        url = '/rest/fileservice/v1/namespaces/{0}'.format(namespace_id)
+        result = self.call(url, data=None, method='GET')
+        not_found_error_param = {
+            'special_code': constants.FILESYSTEM_NOT_EXIST,
+            'error_msg': 'Get namespace detail failed because of filesystem not exist',
+            'error_type': exception.ShareNotFound
+        }
+        self._assert_result(result, "Get namespace detail failed,",
+                            special_error_code_param=not_found_error_param)
         return result
 
     def get_dtrees(self, param):
@@ -541,12 +556,12 @@ class DMEClient(RestClient):
         self._assert_result(result, 'get dtrees failed by page')
         return result.get('dtrees', [])
 
-    def get_dtree_by_name_and_vstore(self, param, name, vstore_id):
+    def get_dtree_by_name_and_vstore(self, param, name):
         dtrees = self.get_dtrees(param)
         if dtrees is None or len(dtrees) == 0:
             raise exception.InvalidShare(reason="Can not get file dtrees.")
         # 由于Dtree查询接口名称是模糊搜索,查询到的列表再通过 name 再精确过滤
-        filtered_dtrees = [dt for dt in dtrees if dt.get('name') == name and dt.get('vstore_id') == vstore_id]
+        filtered_dtrees = [dt for dt in dtrees if dt.get('name') == name]
         # 检查过滤后的元素数量是否为 1
         if len(filtered_dtrees) != 1:
             raise ValueError("Expected 1 dtree with name '{}', but found {}.".format(
@@ -623,6 +638,12 @@ class DMEClient(RestClient):
             'error_type': exception.ShareNotFound
         }
         self._assert_result(result, "update file system failed,", special_error_code_param=not_found_error_param)
+        return result.get('task_id')
+
+    def update_namespace(self, namespace_id, param):
+        url = '/rest/fileservice/v1/namespaces/{0}'.format(namespace_id)
+        result = self.call(url, data=param, method='PUT')
+        self._assert_result(result, "update namespace failed,")
         return result.get('task_id')
 
     def update_quota(self, quota_id, param):
@@ -772,10 +793,15 @@ class DMEClient(RestClient):
         self._assert_result(result, 'update nfs share failed')
         return result.get('task_id')
 
-    def allow_access_for_nfs(self, share_id, access_to, access_level, attr_name):
+    def update_dpc_share(self, share_id, param):
+        url = '/rest/fileservice/v1/dpc-shares/{0}'.format(share_id)
+        result = self.call(url, data=param, method='PUT')
+        self._assert_result(result, 'update dpc share failed')
+        return result.get('task_id')
+
+    def allow_access_for_nfs(self, share_id, access_to, access_level):
         access_value = 'read' if access_level == 'ro' else 'read_and_write'
         param = {
-            "description": "",
             "nfs_share_client_addition": [
                 {
                     "name": access_to,
@@ -784,29 +810,48 @@ class DMEClient(RestClient):
                     "permission_constraint": "no_all_squash",
                     "root_permission_constraint": "no_root_squash",
                     "source_port_verification": "insecure"
-                }
-            ],
-            "character_encoding": getattr(self.driver_config, attr_name).nfs_charset
-        }
-
+                }]}
         return self.update_nfs_share(share_id, param)
 
-    def deny_access_for_nfs(self, share_id, access_to, nfs_share_client_id, attr_name):
+    def allow_access_for_dpc(self, share_id, access_to):
         param = {
-            "description": "",
+            "ip_list_addition":
+                [{
+                    "ip_address": access_to,
+                    "permission": "read_and_write"
+                }]
+        }
+        return self.update_dpc_share(share_id, param)
+
+    def update_access_for_nfs(self, share_id, client_id, access_level):
+        access_value = 'read' if access_level == 'ro' else 'read_and_write'
+        param = {
+            "nfs_share_client_modification": [
+                {
+                    "nfs_share_client_id_in_storage": client_id,
+                    "permission": access_value,
+                    "write_mode": "synchronization",
+                    "permission_constraint": "no_all_squash",
+                    "root_permission_constraint": "no_root_squash",
+                    "source_port_verification": "insecure"
+                }]}
+        return self.update_nfs_share(share_id, param)
+
+    def deny_access_for_nfs(self, share_id, access_to, nfs_share_client_id):
+        param = {
             "nfs_share_client_addition": [],
             "nfs_share_client_modification": [],
             "nfs_share_client_deletion": [
                 {
                     "name": access_to,
                     "nfs_share_client_id_in_storage": nfs_share_client_id
-                }
-            ],
-            "character_encoding": getattr(self.driver_config, attr_name).nfs_charset,
-            "show_snapshot_enable": True
+                }]
         }
-
         return self.update_nfs_share(share_id, param)
+
+    def deny_access_for_dpc(self, share_id, client_id):
+        param = {'ip_list_deletion': [client_id]}
+        return self.update_dpc_share(share_id, param)
 
     def get_nfs_share(self, param):
         return self.get_total_data_by_offset(self.get_nfs_share_by_page, param)
@@ -849,6 +894,19 @@ class DMEClient(RestClient):
         result = self.call(url, data=request, method='POST')
         self._assert_result(result, 'get nfs share clients failed by page')
         return result.get('auth_client_list', [])
+
+    def get_dpc_share_clients(self, dpc_share_id):
+        return self.get_total_data_by_offset(self.get_dpc_share_clients_by_page, dpc_share_id)
+
+    def get_dpc_share_clients_by_page(self, page_no, dpc_share_id):
+        request = {
+            'page_no': page_no,
+            'page_size': constants.DME_GFS_MAX_PAGE_COUNT
+        }
+        url = '/rest/fileservice/v1/dpc-shares/{0}/ip-whitelist/query'.format(dpc_share_id)
+        result = self.call(url, data=request, method='POST')
+        self._assert_result(result, 'get dpc share clients failed by page')
+        return result.get('data', [])
 
     def _get_gfs_capacities_info(self, offset, cluster_name):
         gfs_query_param = {
