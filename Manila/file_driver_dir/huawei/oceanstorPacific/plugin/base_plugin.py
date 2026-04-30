@@ -47,6 +47,8 @@ class BasePlugin(object):
         self.share_metadata = self._get_share_metadata()
         self.share_type_extra_specs = self._get_share_type_extra_specs()
         self.share_proto = self._get_share_proto()
+        self.managed_storage_type = []
+        self.tier_info = {}  # 分级策略信息
 
     @staticmethod
     @abstractmethod
@@ -246,7 +248,7 @@ class BasePlugin(object):
 
     def _get_share_metadata(self):
         try:
-            share_id = self.share.get('share_id')
+            share_id = self.share.get('share_id') or self.share.get('id')
             if self.context is None:
                 self.context = admin_context.get_admin_context()
             return self.share_api.get_share_metadata(self.context, {'id': share_id})
@@ -254,34 +256,61 @@ class BasePlugin(object):
             LOG.info("Can not get share metadata, return {}")
             return {}
 
-    def _check_share_tier_policy_and_set_managed_storage(self, managed_storage_type):
-        share_tier_strategy = self.share.get('share_tier_strategy')
-        if share_tier_strategy is None:
-            err_msg = ("Create share({0}) error, because can't "
-                        "get the share_tier_strategy...".format(self.share.get('id')))
+    def _set_managed_storage_with_no_tier(self):
+        """
+        如果share中没有share_tier_strategy参数，此时只能配置一套存储，
+        配置了哪套存储就去对应存储操作资源
+        :return:
+        """
+        if not self.driver_config.A800 and not self.driver_config.Pacific:
+            err_msg = "No Storage configured."
             raise exception.InvalidInput(err_msg)
+        elif self.driver_config.A800 and self.driver_config.Pacific:
+            err_msg = "Can only config one storage type when tier switch is off."
+            raise exception.InvalidInput(err_msg)
+        elif self.driver_config.A800:
+            self.managed_storage_type.append('A800')
+        else:
+            self.managed_storage_type.append('Pacific')
 
-        if share_tier_strategy['hot_data_size'] > 0 and share_tier_strategy['cold_data_size'] == 0:
-            if hasattr(self.driver_config, 'A800') and self.driver_config.A800:
-                managed_storage_type.append('A800')
-            else:
-                raise exception.InvalidInput(
-                    "Create share({0}) error, config of a800 is not exist".format(self.share.get('id')))
+    def _set_managed_storage_with_tier(self):
+        """
+        如果share中有share_tier_strategy参数，针对一级目录：
+        当hot_data_size不为零，cold_data_size为零时，就去A800操作资源
+        当hot_data_size为零，cold_data_size不为零时，就去Pacific操作资源
+        针对二级目录:
+        由于二级目录中的hot_data_size总是不为零，cold_data_size总是为零，所以
+        不能通过hot_data_size和cold_data_size来判断往哪个存储操作资源，因此此处
+        直接返回，在后续流程中在哪个存储查询到对应的一级目录，就去对应的存储操作资源
+        :return: None
+        """
+        if self._get_share_parent_id():
+            return
 
-        if share_tier_strategy['hot_data_size'] == 0 and share_tier_strategy['cold_data_size'] > 0:
-            if hasattr(self.driver_config, 'Pacific') and self.driver_config.Pacific:
-                managed_storage_type.append('Pacific')
-            else:
-                raise exception.InvalidInput(
-                    "Create share({0}) error, config of pacific is not exist".format(self.share.get('id')))
+        if self.tier_info.get('hot_data_size') > 0 and self.tier_info.get('cold_data_size') > 0:
+            raise exception.InvalidInput("hot_data_size and cold_data_size cannot "
+                                         "be both set greater than 0.")
+        if self.tier_info.get('hot_data_size') == 0 and self.tier_info.get('cold_data_size') == 0:
+            raise exception.InvalidInput("hot_data_size and cold_data_size cannot "
+                                         "be both set to 0.")
 
-        if share_tier_strategy['hot_data_size'] > 0 and share_tier_strategy['cold_data_size'] > 0:
-            raise exception.InvalidInput(
-                "Create share({0}) error, not support create gfs".format(self.share.get('id')))
+        if self.tier_info.get('hot_data_size') > 0 and self.driver_config.A800:
+            self.managed_storage_type.append('A800')
+        if self.tier_info.get('hot_data_size') > 0 and not self.driver_config.A800:
+            raise exception.InvalidInput("A800 storage config must config when "
+                                         "hot_data_size greater than 0")
+        if self.tier_info.get('cold_data_size') > 0 and self.driver_config.Pacific:
+            self.managed_storage_type.append('Pacific')
+        if self.tier_info.get('cold_data_size') > 0 and not self.driver_config.Pacific:
+            raise exception.InvalidInput("Pacific storage config must config when "
+                                         "cold_data_size greater than 0")
 
-        if share_tier_strategy['hot_data_size'] == 0 and share_tier_strategy['cold_data_size'] == 0:
-            raise exception.InvalidInput(
-                "Create share({0}) error, not support current config".format(self.share.get('id')))
+    def _set_managed_storage(self):
+        self.tier_info = self._get_all_share_tier_policy()
+        if not self.tier_info:
+            self._set_managed_storage_with_no_tier()
+        else:
+            self._set_managed_storage_with_tier()
 
     def _get_share_type_extra_specs(self):
         if self.share is None:
@@ -345,7 +374,8 @@ class BasePlugin(object):
         share_tier_value = share_tier_strategy.get(tier_param)
         tier_value = share_tier_value if metadata_tier_value is None else metadata_tier_value
         if tier_value is not None:
-            tier_info[tier_param] = tier_value
+            tier_value = str(tier_value)
+            tier_info[tier_param] = int(tier_value) if tier_value.isdigit() else tier_value
 
     def _get_all_share_tier_policy(self):
         """
@@ -362,6 +392,7 @@ class BasePlugin(object):
         # get tier_migrate_expiration
         self._get_share_tier_policy(tier_info, 'tier_migrate_expiration')
 
+        LOG.info("Tier info is %s", self.tier_info)
         return tier_info
 
     def _get_forbidden_dpc_param(self):
@@ -414,6 +445,10 @@ class BasePlugin(object):
         :param cold_data_size: tier share cold data size
         :return: dict: qos_config of max_bandwidth and max_iops
         """
+        if not self.driver_config.pools_type:
+            LOG.debug("Share qos param by pool type is {}")
+            return {}
+
         storage_pool_id = self._get_current_storage_pool_id()
         pool_qos_param = self.driver_config.pools_type.get(
             storage_pool_id, {}).get('pool_qos_param')

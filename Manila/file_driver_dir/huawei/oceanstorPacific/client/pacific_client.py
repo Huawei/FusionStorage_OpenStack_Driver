@@ -33,7 +33,7 @@ class PacificClient(RestClient):
         super(PacificClient, self).__init__(driver_config)
         self.base_url = self.driver_config.rest_url
         self.login_url = self.base_url + constants.PACIFIC_LOGIN_URL
-        self.relogin_codes = [constants.ERROR_USER_OFFLINE, constants.ERROR_NO_PERMISSION]
+        self.relogin_codes = [str(constants.ERROR_USER_OFFLINE), str(constants.ERROR_NO_PERMISSION)]
         self.retry_codes = list(constants.ERROR_SPECIAL_STATUS) + [constants.ERROR_URL_OPEN]
         self.retry_times = constants.REQUEST_RETRY_TIMES
 
