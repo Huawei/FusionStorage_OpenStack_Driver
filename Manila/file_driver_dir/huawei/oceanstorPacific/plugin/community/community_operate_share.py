@@ -196,7 +196,7 @@ class CommunityOperateShare(OperateShare):
     def _check_domain(self):
         """当共享协议类型存在Nfs或Cifs时，检查配置文件集群域名是否存在"""
 
-        domain_name = getattr(self.driver_config, self.managed_storage_type[0]).domain
+        domain_name = self.driver_config.domain
         self.domain = domain_name.strip() if domain_name else domain_name
         if ('NFS' in self.share_proto or 'CIFS' in self.share_proto) and not self.domain:
             err_msg = _("Create namespace({0}) error, because can't "
