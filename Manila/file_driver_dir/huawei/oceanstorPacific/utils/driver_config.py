@@ -17,6 +17,7 @@
 import os
 import re
 
+import netaddr
 from lxml import etree as ET
 from oslo_log import log
 
@@ -54,6 +55,8 @@ class StorageConfig(object):
         self.zone_id = None
         self.vstore_id = None
         self.dpc_user_id = None
+        self.smart_transfer_enable = False
+        self.pacific_host_ips = None
         self.default_value = default_value
         self.storage_config = self._get_storage_config()
 
@@ -81,6 +84,30 @@ class StorageConfig(object):
             LOG.error(msg)
             raise exception.BadConfigurationException(reason=msg)
 
+    @staticmethod
+    def _parse_smart_transfer_enable(config_label, text):
+        if not text or not text.strip():
+            return False
+        if str(text).strip().lower() in ('true', 'false'):
+            return str(text).strip().lower() == 'true'
+        msg = _("SmartTransfer/Enable configured error, Please set this parameter to true or false.")
+        LOG.error(msg)
+        raise exception.BadConfigurationException(reason=msg)
+
+    @staticmethod
+    def _parse_pacific_host_ips(config_label, text):
+        if not text or not text.strip():
+            return None
+        ip_list = [ip.strip() for ip in text.split(';') if ip.strip()]
+        for ip in ip_list:
+            try:
+                netaddr.IPAddress(ip)
+            except Exception as err:
+                msg = _("PacificHostIp '%s' is not a valid IP address.") % ip
+                LOG.error(msg)
+                raise exception.BadConfigurationException(reason=msg)
+        return ip_list
+
     def set_storage_config(self):
         if not self.xml_root.find(self.storage_type):
             return
@@ -93,6 +120,15 @@ class StorageConfig(object):
             else:
                 config_value = config_func(config_label, text)
             setattr(self, config_info['attr'], config_value)
+        self._validate_smart_transfer_config()
+
+    def _validate_smart_transfer_config(self):
+        if getattr(self, 'smart_transfer_enable', False):
+            pacific_host_ips = getattr(self, 'pacific_host_ips', None)
+            if not pacific_host_ips:
+                msg = _("PacificHostIp must be configured when SmartTransfer/Enable is true")
+                LOG.error(msg)
+                raise exception.BadConfigurationException(reason=msg)
 
     def _set_positive_value(self, config_label, text):
         self._check_config_exist(config_label, text)
@@ -131,7 +167,16 @@ class StorageConfig(object):
             'Qos/MaxBandWidth': {
                 'attr': 'max_band_width', 'func': self._set_optional_value,
                 'default': self.default_value.get('max_band_width')
-            }}
+            },
+            'SmartTransfer/Enable': {
+                'attr': 'smart_transfer_enable',
+                'func': self._parse_smart_transfer_enable
+            },
+            'SmartTransfer/PacificHostIp': {
+                'attr': 'pacific_host_ips',
+                'func': self._parse_pacific_host_ips
+            }
+        }
 
 
 class DriverConfig(object):
