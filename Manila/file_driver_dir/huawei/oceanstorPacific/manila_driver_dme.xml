@@ -26,9 +26,13 @@
             <Max_IOPS>100</Max_IOPS>
             <MaxBandWidth>1</MaxBandWidth>
         </Qos>
+        <SmartTransfer>
+            <Enable>true</Enable>
+            <PacificHostIp>x.x.x.x;x.x.x.x</PacificHostIp>
+        </SmartTransfer>
     </A800>
     <Pacific>
-        <Sn>xxxx</Sn>>
+        <Sn>xxxx</Sn>
         <StoragePool>0</StoragePool>
         <VStoreId>0</VStoreId>
         <ClusterDomainName>nfs-ip</ClusterDomainName>
