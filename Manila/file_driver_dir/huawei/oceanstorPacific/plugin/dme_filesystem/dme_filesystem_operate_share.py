@@ -13,8 +13,8 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-from concurrent.futures import ThreadPoolExecutor
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
 from oslo_log import log
@@ -110,7 +110,30 @@ class DmeOperateShare(CommunityOperateShare):
         create_fs_request = self._build_create_fs_request(fs_name)
         task_id = self.client.create_file_system(create_fs_request)
         self.client.wait_task_until_complete(task_id, query_interval_seconds=1)
+        if self.driver_config.A800.smart_transfer_enable:
+            self._add_pacific_ip_whitelist(fs_name)
         return self._get_share_path(fs_name + '/')
+
+    def _add_pacific_ip_whitelist(self, fs_name):
+        file_system = self.client.query_specified_file_system(self._build_query_param())
+        if not file_system:
+            err_msg = _("Create file system failed for share %s") % fs_name
+            LOG.error(err_msg)
+            raise exception.InvalidShare(reason=err_msg)
+        param = {'fs_id': file_system.get('id')}
+        nfs_shares = self.client.get_nfs_share(param)
+        if not nfs_shares:
+            err_msg = _("NFS share not found for filesystem %s") % fs_name
+            LOG.error(err_msg)
+            raise exception.InvalidShare(reason=err_msg)
+        nfs_share_id = nfs_shares[0].get('id')
+        pacific_host_ips = self.driver_config.A800.pacific_host_ips or []
+        for ip in pacific_host_ips:
+            try:
+                self.client.allow_access_for_nfs(nfs_share_id, self.standard_ipaddr(ip), 'rw')
+            except Exception as e:
+                LOG.error("Failed to add IP whitelist for %s: %s", ip, e)
+                raise exception.InvalidShare(reason=_("Failed to add IP whitelist for %s") % ip)
 
     def _create_namespace(self):
         # 创建命名空间的参数
@@ -164,7 +187,11 @@ class DmeOperateShare(CommunityOperateShare):
         else:
             create_fs_param['zone_id'] = self.driver_config.A800.storage_id
 
-        if 'NFS' in self.share_proto:
+        # An NFS share needs to be created for a file system in the following two cases:
+        # 1. The NFS protocol is specified to be enabled in share_proto.
+        # 2. The switch for creating the NFS protocol to meet the
+        #    SmartTransfer capability is enabled in the XML file.
+        if 'NFS' in self.share_proto or self.driver_config.A800.smart_transfer_enable:
             create_nfs_share_param = {
                 'share_path': '/' + fs_name + '/',
                 'character_encoding': self.driver_config.A800.nfs_charset
@@ -409,6 +436,14 @@ class DmeOperateShare(CommunityOperateShare):
 
         return True
 
+    def _del_dpc_shares(self, param):
+        dpc_shares = self.client.get_dpc_share(param)
+        dpc_share_ids = [obj.get('id') for obj in dpc_shares]
+        if dpc_share_ids and len(dpc_share_ids) > 0:
+            dpc_task_id = self.client.delete_dpc_share(dpc_share_ids)
+            self.client.wait_task_until_complete(
+                dpc_task_id, query_interval_seconds=constants.DME_QUERY_INTERVAL_SECONDS)
+
     def _build_query_namespace_param(self):
         return {
             'storage_id': self.driver_config.Pacific.storage_id,
@@ -443,12 +478,7 @@ class DmeOperateShare(CommunityOperateShare):
             self._del_nfs_shares(param)
 
         def del_dpc_shares():
-            dpc_shares = self.client.get_dpc_share(param)
-            dpc_share_ids = [obj.get('id') for obj in dpc_shares]
-            if dpc_share_ids and len(dpc_share_ids) > 0:
-                dpc_task_id = self.client.delete_dpc_share(dpc_share_ids)
-                self.client.wait_task_until_complete(
-                    dpc_task_id, query_interval_seconds=constants.DME_QUERY_INTERVAL_SECONDS)
+            self._del_dpc_shares(param)
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             future_nfs = executor.submit(del_nfs)
