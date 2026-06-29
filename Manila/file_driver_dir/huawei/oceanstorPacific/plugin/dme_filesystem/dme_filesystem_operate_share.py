@@ -92,8 +92,12 @@ class DmeOperateShare(CommunityOperateShare):
         else:
             size = self.filesystem_size if self.filesystem_size is not None else self.share.get('size')
         qos = self._set_qos_param_by_size_and_type(size)
-        LOG.info('share size is %s, the default qos is %s', size, qos)
-        return qos
+        qos_config = {
+            "total_bytes_sec": int(qos.get('max_mbps', 0)),
+            "total_iops_sec": int(qos.get('max_iops', 0))
+        }
+        LOG.info('share size is %s, the default qos is %s', size, qos_config)
+        return qos_config
 
     def ensure_share(self):
         return self._get_ensure_share_location()
@@ -200,11 +204,14 @@ class DmeOperateShare(CommunityOperateShare):
         if 'DPC' in self.share_proto:
             create_dpc_share_param = {
                 'charset': self.driver_config.A800.dpc_charset,
-                'dpc_share_auth': [
+                'dpc_share_auth': []}
+            if self.driver_config.A800.dpc_user_id is not None and self.driver_config.A800.dpc_user_id != '':
+                create_dpc_share_param.get('dpc_share_auth').append(
                     {
                         'dpc_user_id': self.driver_config.A800.dpc_user_id,
                         'permission': self.driver_config.A800.dpc_user_permission
-                    }]}
+                    }
+                )
             create_fs_param['create_dpc_share_param'] = create_dpc_share_param
         return create_fs_param
 
@@ -272,13 +279,11 @@ class DmeOperateShare(CommunityOperateShare):
         self._check_storage_id()
         self._check_vstore_id()
         self._check_zone_id_required()
-        self._check_dpc_param()
 
     def _check_create_fs_param(self):
         self._check_storage_id()
         self._check_vstore_id()
         self._check_zone_id()
-        self._check_dpc_param()
 
     def _check_storage_id(self):
         """storageId是根据storageSn查询出来的,可能为空"""
@@ -735,10 +740,14 @@ class DmeOperateShare(CommunityOperateShare):
         if 'DPC' in self.share_proto:
             dtree_config['dataturbo_share'] = {
                 "charset": self.driver_config.A800.dpc_charset,
-                "dpc_share_auth": [{
-                    "permission": self.driver_config.A800.dpc_user_permission,
-                    "dpc_user_id": self.driver_config.A800.dpc_user_id
-                }]}
+                "dpc_share_auth": []}
+            if self.driver_config.A800.dpc_user_id is not None and self.driver_config.A800.dpc_user_id != '':
+                dtree_config.get('dataturbo_share').get('dpc_share_auth').append(
+                    {
+                        'dpc_user_id': self.driver_config.A800.dpc_user_id,
+                        'permission': self.driver_config.A800.dpc_user_permission
+                    }
+                )
         dtree_config.update({
             'storage_id': self.driver_config.A800.storage_id,
             'zone_id': (

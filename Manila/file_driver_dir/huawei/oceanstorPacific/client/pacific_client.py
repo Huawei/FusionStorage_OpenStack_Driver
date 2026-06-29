@@ -588,6 +588,8 @@ class PacificClient(RestClient):
         result = self.call(url, nfs_para, "DELETE")
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Delete the NFS share success.(nfs_share_id: {0})".format(nfs_share_id)))
+        elif result.get('result', {}).get('code') == constants.NFS_SHARE_NOT_EXIST:
+            LOG.info("NFS share has already been deleted.(nfs_share_id: {0})".format(nfs_share_id))
         else:
             err_msg = "Delete the NFS share failed.(nfs_share_id: {0})".format(nfs_share_id)
             raise exception.InvalidShare(reason=err_msg)
@@ -604,6 +606,8 @@ class PacificClient(RestClient):
 
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Delete the CIFS share success.(cifs_share_id: {0})".format(cifs_share_id)))
+        elif result.get('result', {}).get('code') == constants.CIFS_SHARE_NOT_EXIST:
+            LOG.info("CIFS share has already been deleted.(cifs_share_id: {0})".format(cifs_share_id))
         else:
             err_msg = "Delete the CIFS share failed.(cifs_share_id: {0})".format(cifs_share_id)
             raise exception.InvalidShare(reason=err_msg)
@@ -778,24 +782,28 @@ class PacificClient(RestClient):
         result = self.call(url, nfs_para, "DELETE")
         if result.get('result', {}).get('code') == 0:
             LOG.info(_("Delete the NFS client success.(client_id: {0})".format(client_id)))
+        elif result.get('result', {}).get('code') == constants.NFS_SHARE_CLIENT_NOT_EXIST:
+            LOG.info("NFS share client has already been deleted.(client_id: {0})".format(client_id))
         else:
             err_msg = "Delete the NFS client failed.(client_id: {0})".format(client_id)
             raise exception.InvalidShare(reason=err_msg)
 
-    def deny_access_for_cifs(self, user_id, account_id):
+    def deny_access_for_cifs(self, client_id, account_id):
         """This interface is used to delete a CIFS share user or user group."""
 
         url = "file_service/cifs_share_auth_client"
         query_para = {
-            "id": user_id,
+            "id": client_id,
             "account_id": account_id
         }
         result = self.call(url, query_para, "DELETE")
 
         if result.get('result', {}).get('code') == 0:
-            LOG.info(_("Delete the CIFS client success.(user_id: {0})".format(user_id)))
+            LOG.info(_("Delete the CIFS client success.(user_id: {0})".format(client_id)))
+        elif result.get('result', {}).get('code') == constants.SHARE_CLIENT_NOT_EXIST:
+            LOG.info("CIFS share client has already been deleted.(client_id: {0})".format(client_id))
         else:
-            err_msg = "Delete the CIFS client failed.(user_id: {0})".format(user_id)
+            err_msg = "Delete the CIFS client failed.(user_id: {0})".format(client_id)
             raise exception.InvalidShare(reason=err_msg)
 
     def open_dpc_auth_switch(self, namespace_name):
