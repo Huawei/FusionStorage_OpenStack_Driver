@@ -24,9 +24,8 @@
 ||OceanStor Pacific 8.1.5/8.2.0/8.2.1/V800R001C10|
 
 ## Version mappings among Manila Driver, DME, Huawei Storage, and OpenStack
-| OpenStack |Huawei Storage|
-|---|---|---|
 | OpenStack | Huawei Storage | DME |
+|---|---|---|
 | 中国移动苏研Pike版本 | OceanStor A800 V700R001C30;OceanStor A600 V700R001C30;OceanStor Pacific 9550; | DME 25.1.RC1 |
 
 # 25.2.0
