@@ -26,7 +26,7 @@
 ## Version mappings among Manila Driver, DME, Huawei Storage, and OpenStack
 | OpenStack | Huawei Storage | DME |
 |---|---|---|
-| 中国移动苏研Pike版本 | OceanStor A800 V700R001C30;OceanStor A600 V700R001C30;OceanStor Pacific 9550; | DME 25.1.RC1 |
+| 中国移动苏研Pike版本 | OceanStor A800 V700R001C30<br>OceanStor A600 V700R001C30<br>OceanStor Pacific 9550 | DME 25.1.RC1 |
 
 # 25.2.0
 ## Mappings between Cinder Driver and OpenStack versions
