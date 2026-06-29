@@ -101,9 +101,9 @@ class StorageConfig(object):
         ip_list = [ip.strip() for ip in text.split(';') if ip.strip()]
         for ip in ip_list:
             try:
-                netaddr.IPAddress(ip)
+                netaddr.IPNetwork(ip)
             except Exception as err:
-                msg = _("PacificHostIp '%s' is not a valid IP address.") % ip
+                msg = _("PacificHostIp '%s' is not a valid IP address or network.") % ip
                 LOG.error(msg)
                 raise exception.BadConfigurationException(reason=msg)
         return ip_list
@@ -334,6 +334,8 @@ class DriverConfig(object):
             self._hot_disk_type,
             self._warm_disk_type,
             self._cold_disk_type,
+            self._dpc_mount_options,
+            self._nfs_mount_options,
             self._rollback_rate,
             self._third_platform,
             self._share_backend_pools_type,
@@ -362,6 +364,28 @@ class DriverConfig(object):
         if self.config.product == constants.PRODUCT_PACIFIC:
             self.check_config_exist(text, 'Filesystem/AccountName')
             setattr(self.config, 'account_name', text.strip())
+
+    def _dpc_mount_options(self, xml_root):
+        text = xml_root.findtext('DPC/MountOption')
+        if not text or not text.strip():
+            setattr(self.config, 'dpc_mount_option', '')
+        elif not driver_utils.validate_mount_parameters(text):
+            err_msg = 'DPC/MountOption is invalid.' + constants.MOUNT_OPTION_ERR_MSG
+            LOG.error(err_msg)
+            raise exception.BadConfigurationException(reason=err_msg)
+        else:
+            setattr(self.config, 'dpc_mount_option', text.strip())
+
+    def _nfs_mount_options(self, xml_root):
+        text = xml_root.findtext('NFS/MountOption')
+        if not text or not text.strip():
+            setattr(self.config, 'nfs_mount_option', '')
+        elif not driver_utils.validate_mount_parameters(text):
+            err_msg = 'NFS/MountOption is invalid.' + constants.MOUNT_OPTION_ERR_MSG
+            LOG.error(err_msg)
+            raise exception.BadConfigurationException(reason=err_msg)
+        else:
+            setattr(self.config, 'nfs_mount_option', text.strip())
 
     def _nas_password(self, xml_root):
         text = xml_root.findtext('Storage/UserPassword')
