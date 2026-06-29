@@ -9,7 +9,7 @@
 | OpenStack |Huawei Storage|
 |---|---|
 |Cinder Driver|FusionStorage Block 8.0.0/8.0.1|
-| |OceanStor Pacific 8.1.0/8.1.1/8.1.2/8.1.3/8.1.5/8.2.0/8.2.1/V800R001C10|
+| |OceanStor Pacific 8.1.0/8.1.1/8.1.2/8.1.3/8.1.5/8.2.0/8.2.1/V800R001C10/V800R001C20|
 
 ## Mappings between Manila Driver and OpenStack versions
 
@@ -20,8 +20,7 @@
 ## Version mappings among Manila Driver, Huawei storage
 | OpenStack |Huawei Storage|
 |---|---|
-|Manila Driver|OceanStor Pacific 8.1.5/8.2.0/8.2.1/V800R001C10|
-||OceanStor Pacific 8.1.5/8.2.0/8.2.1/V800R001C10|
+|Manila Driver|OceanStor Pacific 8.1.5/8.2.0/8.2.1/V800R001C10/V800R001C20|
 
 ## Version mappings among Manila Driver, DME, Huawei Storage, and OpenStack
 | OpenStack | Huawei Storage | DME |
