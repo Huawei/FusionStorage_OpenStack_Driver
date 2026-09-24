@@ -120,6 +120,7 @@ class CommunityCheckUpdateStorage(CheckUpdateStorage):
                     file_system=pool_info.get('storagePoolName'),
                     qos=True,
                     reserved_percentage=int(self.driver_config.reserved_percentage),
+                    reserved_snapshot_percentage=int(self.driver_config.reserved_percentage),
                     reserved_share_extend_percentage=int(self.driver_config.reserved_percentage),
                     max_over_subscription_ratio=float(self.driver_config.max_over_ratio),
                     ipv6_support=True,

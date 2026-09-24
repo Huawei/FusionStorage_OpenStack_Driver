@@ -428,8 +428,13 @@ class DmeOperateShare(CommunityOperateShare):
         try:
             file_system = self.client.query_specified_file_system(param)
         except exception.InvalidShare as err:
-            LOG.warn("Query filesystem failed, error = %s", err)
+            LOG.warning("Query filesystem failed, error = %s", err)
             return False
+
+        if not file_system:
+            LOG.info("Can not find filesystem %s on device", param.get('name'))
+            return False
+
         file_system_id = file_system.get('id')
 
         share_param = {'fs_id': file_system_id}
@@ -494,6 +499,10 @@ class DmeOperateShare(CommunityOperateShare):
 
     def _change_file_system_size(self, param, new_size):
         file_system = self.client.query_specified_file_system(param)
+        if not file_system:
+            err_msg = "Expected at most 1 file system, but got 0."
+            raise exception.InvalidShare(reason=err_msg)
+
         file_system_id = file_system.get('id')
 
         update_param = {'capacity': self.tier_info.get('hot_data_size') or new_size}

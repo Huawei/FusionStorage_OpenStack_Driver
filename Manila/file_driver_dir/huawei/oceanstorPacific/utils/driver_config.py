@@ -329,6 +329,7 @@ class DriverConfig(object):
             self._max_over_ratio,
             self._ssl_verify,
             self._nas_domain,
+            self._share_location_prefix,
             self._ssl_cert_path,
             self._semaphore,
             self._hot_disk_type,
@@ -455,6 +456,13 @@ class DriverConfig(object):
     def _nas_domain(self, xml_root):
         text = xml_root.findtext('Filesystem/ClusterDomainName')
         setattr(self.config, 'domain', text)
+
+    def _share_location_prefix(self, xml_root):
+        text = xml_root.findtext('Storage/ShareLocationPrefix')
+        if not text or not text.strip():
+            setattr(self.config, 'share_location_prefix', True)
+        else:
+            setattr(self.config, 'share_location_prefix', text.strip().lower() == 'true')
 
     def _ssl_verify(self, xml_root):
         text = xml_root.findtext('Storage/SslCertVerify')

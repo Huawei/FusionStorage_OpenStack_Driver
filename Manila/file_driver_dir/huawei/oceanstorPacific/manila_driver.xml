@@ -15,6 +15,7 @@
 		<HotDiskType>ssd</HotDiskType>
 		<WarmDiskType>sas</WarmDiskType>
 		<ColdDiskType>sata</ColdDiskType>
+		<ShareLocationPrefix>true</ShareLocationPrefix>
     </Storage>
 	<Filesystem>
 		<StoragePool>0</StoragePool>
