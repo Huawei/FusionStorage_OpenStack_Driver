@@ -119,7 +119,7 @@ class DmeChangeAccess(CommunityChangeAccess):
     def _get_nfs_share_clients(self):
         """获取NFS共享客户端信息"""
         nfs_share_clients = {'type': 'NFS'}
-        if not self.nfs_share_id:
+        if self.nfs_share_id is None:
             return nfs_share_clients
         try:
             access_client = self.client.get_nfs_share_clients({'nfs_share_id': self.nfs_share_id})
@@ -138,7 +138,7 @@ class DmeChangeAccess(CommunityChangeAccess):
     def _get_dpc_share_clients(self):
         """获取DPC共享客户端信息"""
         dpc_share_clients = {'type': 'DPC'}
-        if not self.dpc_share_id:
+        if self.dpc_share_id is None:
             return dpc_share_clients
         try:
             access_client = self.client.get_dpc_share_clients(self.dpc_share_id)
@@ -245,14 +245,18 @@ class DmeChangeAccess(CommunityChangeAccess):
             self.share_path = 'share-' + self.share_parent_id + '/' + share_name
         elif 'A800' in self.managed_storage_type:
             file_system = self.client.query_specified_file_system(self._build_query_param())
-            param = {'fs_id': file_system.get('id')}
+            param = {'fs_id': file_system.get('id')} if file_system else {}
         elif 'Pacific' in self.managed_storage_type:
             namespace = self.client.query_specified_namespaces(self._build_query_namespace_param())
-            param = {'namespace_id': namespace.get('id')}
+            param = {'namespace_id': namespace.get('id')} if namespace else {}
         else:
             error_msg = "Can not find storage config."
             LOG.error(error_msg)
             raise exception.InvalidShare(reason=error_msg)
+
+        if not param and not self.allow_access_proto:
+            LOG.info("Share parent object not exist, don't need to deny access")
+            return
 
         if 'NFS' in self.allow_access_proto or 'NFS' in self.deny_access_proto:
             nfs_shares = self.client.get_nfs_share(param)
@@ -269,13 +273,11 @@ class DmeChangeAccess(CommunityChangeAccess):
             raise exception.InvalidShare(reason=err_msg)
 
     def _set_share_id(self, share_list):
-        if not share_list:
-            return ''
         for share in share_list:
             share_path = share.get('share_path', '').strip('/')
             if share_path == self.share_path:
                 return share.get('id')
-        return ''
+        return None
 
     def _build_query_namespace_param(self):
         return {
@@ -301,6 +303,6 @@ class DmeChangeAccess(CommunityChangeAccess):
         if namespace_dtree:
             return {'owning_dtree_id': namespace_dtree.get('id')}
 
-        error_msg = "Share %s not exist on device" % self.share.get('share_id')
-        LOG.error(error_msg)
-        raise exception.InvalidShare(reason=error_msg)
+        msg = "Share %s don't have dtree on device" % self.share.get('share_id')
+        LOG.error(msg)
+        return {}

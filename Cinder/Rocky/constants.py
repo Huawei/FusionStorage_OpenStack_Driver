@@ -44,6 +44,7 @@ CONF_STORAGE_CA_FILEPATH = "storage_ca_filepath"
 CONF_STORAGE_KEY_FILEPATH = "storage_key_filepath"
 CONF_STORAGE_CERT_FILEPATH = "storage_cert_filepath"
 CONF_STORAGE_SSL_TWO_WAY_AUTH = "storage_ssl_two_way_auth"
+CONF_FILE_WRITABLE = "dsware_config_file_writable"
 
 DEFAULT_WAIT_INTERVAL = 5
 MIGRATION_COMPLETE = 76

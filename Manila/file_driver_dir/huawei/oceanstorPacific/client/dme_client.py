@@ -440,13 +440,15 @@ class DMEClient(RestClient):
     def query_specified_file_system(self, param):
         file_systems = self.get_file_systems(param)
         if not file_systems or len(file_systems) != constants.DME_DATA_COUNT_ONE:
-            err_msg = _("Expected at most 1 file system, but got {0}.").format(len(file_systems))
-            raise exception.InvalidShare(reason=err_msg)
+            return {}
 
         return file_systems[0]
 
     def query_namespaces(self, param):
         return self.get_total_data_by_offset(self.query_namespace_by_page, param)
+
+    def query_namespaces_new(self, param):
+        return self.get_total_data_by_offset(self.query_namespace_by_request, param)
 
     def query_specified_namespaces(self, param):
         namespaces = self.query_namespaces(param)
@@ -482,6 +484,24 @@ class DMEClient(RestClient):
 
     def get_file_systems(self, param):
         return self.get_total_data_by_offset(self.get_file_systems_by_page, param)
+
+    def query_namespace_by_request(self, offset, param):
+        data = {
+            'storage_id': param.get('storage_id'),
+            'request': {
+                'method': 'GET',
+                'url': 'https://${ip}:${port}/api/v2/converged_service/namespaces',
+                'param': [{
+                    'key': 'filter',
+                    'value': '"{\"name\":\"share-\", \"account_id\":\"%s\"}"' % param.get('vstore_raw_id')
+                }, {
+                    'key': 'range',
+                    'value': "{\"offset\": %s, \"limit\":100}" % offset
+                }]}}
+        result = self.call('/rest/storagemgmt/v2/transmit-huawei-storage-request', data=data, method='POST')
+        self._assert_result(result, 'get namespace failed by page')
+        response_body = json.loads(result.get('response_body', '{}'))
+        return response_body.get('data', [])
 
     def query_namespace_by_page(self, page_no, param):
         request = {
@@ -659,6 +679,13 @@ class DMEClient(RestClient):
 
     def get_quotas(self, param):
         return self.get_total_data_by_offset(self.get_quotas_by_page, param)
+
+    def get_quota_by_request(self, param):
+        url = '/rest/storagemgmt/v2/transmit-huawei-storage-request'
+        result = self.call(url, data=param, method='POST')
+        self._assert_result(result, 'get dtree quotas failed')
+        response_body = json.loads(result.get('response_body', '{}'))
+        return response_body.get('data', [])
 
     def get_quotas_by_page(self, page_no, param):
         request = {

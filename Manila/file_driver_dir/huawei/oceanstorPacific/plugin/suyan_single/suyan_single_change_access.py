@@ -93,7 +93,8 @@ class SuyanSingleChangeAccess(CommunityChangeAccess):
         namespace_info = self.client.query_namespace_by_name(
             self.namespace_name)
         self.namespace_id = namespace_info.get('id')
-        dtree_info = self.client.query_dtree_by_name(
-            self.dtree_name, self.namespace_id)
-        for info in dtree_info:
-            self.dtree_id = info.get('id')
+        if self.namespace_id is not None:
+            dtree_info = self.client.query_dtree_by_name(
+                self.dtree_name, self.namespace_id)
+            for info in dtree_info:
+                self.dtree_id = info.get('id')

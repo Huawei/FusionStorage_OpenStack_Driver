@@ -61,6 +61,9 @@ class FusionStorageConf(object):
         return need_encode, encode_param
 
     def _encode_authentication(self):
+        if not self.configuration.safe_get(constants.CONF_FILE_WRITABLE):
+            return
+
         name_node = self.configuration.safe_get(constants.CONF_USER)
         pwd_node = self.configuration.safe_get(constants.CONF_PWD)
 

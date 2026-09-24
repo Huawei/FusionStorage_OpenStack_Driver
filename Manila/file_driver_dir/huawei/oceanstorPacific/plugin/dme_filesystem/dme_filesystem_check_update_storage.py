@@ -58,6 +58,7 @@ class DmeCheckUpdateStorage(CommunityCheckUpdateStorage):
         pool_capabilities = dict(
             qos=True,
             reserved_percentage=int(self.driver_config.reserved_percentage),
+            reserved_snapshot_percentage=int(self.driver_config.reserved_percentage),
             reserved_share_extend_percentage=int(self.driver_config.reserved_percentage),
             max_over_subscription_ratio=float(self.driver_config.max_over_ratio),
             ipv6_support=True,
@@ -135,16 +136,14 @@ class DmeCheckUpdateStorage(CommunityCheckUpdateStorage):
 
     def _set_pacific_share_usage(self, param, all_share_usages):
         with ThreadPoolExecutor(max_workers=2) as executor:
-            future_name_space = executor.submit(self.client.query_namespaces, param.get('pacific'))
-            future_fs_dtree = executor.submit(self._get_dtrees_and_quotas, param.get('pacific'))
+            future_name_space = executor.submit(self.client.query_namespaces_new, param.get('pacific'))
+            future_fs_dtree = executor.submit(self._get_pacific_dtree_quotas, param.get('pacific'))
 
             name_spaces = future_name_space.result()
-            ns_dtrees, ns_dtree_quotas = future_fs_dtree.result()
+            ns_dtree_quotas = future_fs_dtree.result()
 
         self._set_name_space_usage(name_spaces, all_share_usages)
-        quotas_index = {quota.get('parent_raw_id'): quota for quota in ns_dtree_quotas}
-        self._set_dtree_usage(ns_dtrees, quotas_index, all_share_usages)
-
+        self._set_namespace_dtree_quotas(ns_dtree_quotas, all_share_usages)
 
     def _set_file_system_usage(self, file_systems, all_share_usages):
         for file_system in file_systems:
@@ -207,6 +206,23 @@ class DmeCheckUpdateStorage(CommunityCheckUpdateStorage):
 
             quota = quotas_index.get(dtree.get('id_in_storage'), {})
             hard_limit = quota.get('space_hard_quota', 0)
+            used_space = quota.get('space_hard_used', 0)
+            avail_space = hard_limit - used_space
+
+            all_share_usages[share_id] = {
+                'used_space': str(int(used_space)),
+                'avail_space': str(int(avail_space)),
+                'hard_limit': str(int(hard_limit)),
+            }
+
+    def _set_namespace_dtree_quotas(self, quotas, all_share_usages):
+        for dtree_name, quota in quotas.items():
+            share_id = self._get_share_id_by_info_name(dtree_name)
+            if not share_id:
+                LOG.debug("The dtree %s is not created from manila, don't need to return", dtree_name)
+                continue
+
+            hard_limit = quota.get('space_hard_quota', 0)
             used_space = quota.get('space_used', 0)
             avail_space = hard_limit - used_space
 
@@ -216,15 +232,19 @@ class DmeCheckUpdateStorage(CommunityCheckUpdateStorage):
                 'hard_limit': str(int(hard_limit)),
             }
 
-    def _get_dtrees_and_quotas(self, param, vstore_id=None):
+    def _get_dtrees_and_quotas(self, param, vstore_id):
         dtrees = self.client.get_dtrees(param)
-        if vstore_id is not None:
-            dtrees = [dtree for dtree in dtrees if dtree.get('vstore_id') == vstore_id]
-        else:
-            dtrees = [dtree for dtree in dtrees]
+        dtrees = [dtree for dtree in dtrees if dtree.get('vstore_id') == vstore_id]
         quotas = self._get_dtree_directory_quotas(param)
 
         return dtrees, quotas
+
+    def _get_pacific_dtree_quotas(self, param):
+        dtrees = self.client.get_dtrees(param)
+        dtrees = [dtree for dtree in dtrees]
+        quotas = self._get_pacific_dtree_directory_quotas(dtrees, param)
+
+        return quotas
 
     def _get_dtree_directory_quotas(self, param):
         quota_param = {
@@ -235,6 +255,46 @@ class DmeCheckUpdateStorage(CommunityCheckUpdateStorage):
         if 'zone_id' in param:
             quota_param['zone_id'] = param.get('zone_id')
         return self.client.get_quotas(quota_param)
+
+    def _get_pacific_dtree_directory_quotas(self, dtrees, param):
+        quotas = {}
+        for dtree in dtrees:
+            try:
+                quota_param = {
+                    'storage_id': param.get('storage_id'),
+                    'request': {
+                        'method': 'GET',
+                        'url': 'https://${ip}:${port}/api/v2/converged_service/quota',
+                        'params': [{
+                            'key': 'parent_type',
+                            'value': '16445'
+                        }, {
+                            'key': 'parent_id',
+                            'value': '%s' % dtree.get('id_in_storage'),
+                        }, {
+                            "key": "space_unit_type",
+                            "value": 0
+                        }, {
+                            "key": "range",
+                            "value": "{\"offset\":0,\"limit\":2}"
+                        }, {
+                            "key": "account_id",
+                            "value": "%s" % param.get('vstore_raw_id')
+                        }]
+                    }
+                }
+                self._get_dtree_directory_quota(quota_param, quotas, dtree)
+            except Exception as err:
+                LOG.warning("Get Dtree %s quota failed, %s", dtree.get('name', ''), err)
+                continue
+
+        return quotas
+
+    def _get_dtree_directory_quota(self, quota_param, quotas, dtree):
+        dtree_quotas = self.client.get_quota_by_request(quota_param)
+        for quota in dtree_quotas:
+            if quota.get('quota_type') == constants.QUOTA_TYPE_DIRECTORY:
+                quotas[dtree.get('name')] = quota
 
     def _build_query_param(self):
         query_param = {}

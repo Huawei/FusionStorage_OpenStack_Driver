@@ -75,7 +75,7 @@ LOG = log.getLogger(__name__)
 
 class HuaweiNasDriver(driver.ShareDriver):
     """Huawei Oceanstor Pacific Share Driver."""
-    VERSION = "26.1.0"
+    VERSION = "26.2.0"
 
     def __init__(self, *args, **kwargs):
         """Do initialization."""
@@ -177,7 +177,7 @@ class HuaweiNasDriver(driver.ShareDriver):
             ChangeAccess, share, self.storage_features, context).deny_access(access)
 
     def update_access(self, context, share, access_rules,
-                      add_rules=None, delete_rules=None, share_server=None):
+                      add_rules=None, delete_rules=None, **kwargs):
         """Update access rules list."""
 
         LOG.info("********************Update access.********************")

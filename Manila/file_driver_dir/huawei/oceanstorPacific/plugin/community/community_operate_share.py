@@ -472,16 +472,17 @@ class CommunityOperateShare(OperateShare):
     def _get_location(self):
         """返回共享路径"""
         location = []
+        add_prefix = getattr(self.driver_config, 'share_location_prefix', True)
         if 'DPC' in self.share_proto:
             dpc_path = self._get_dpc_path('/' + self.namespace_name)
-            location.append('DPC:' + dpc_path)
+            location.append(('DPC:' if add_prefix else '') + dpc_path)
         if 'NFS' in self.share_proto:
             nfs_path = self._get_nfs_path(self.domain + ":/" + self.namespace_name)
-            location.append('NFS:' + nfs_path)
+            location.append(('NFS:' if add_prefix else '') + nfs_path)
         if 'CIFS' in self.share_proto:
-            location.append('CIFS:\\\\' + self.domain + '\\' + self.namespace_name)
+            location.append(('CIFS:\\\\' if add_prefix else '\\\\') + self.domain + '\\' + self.namespace_name)
         if 'HDFS' in self.share_proto:
-            location.append('HDFS:/' + self.namespace_name)
+            location.append(('HDFS:' if add_prefix else '') + '/' + self.namespace_name)
 
         LOG.info("Create share successfully, the location of this share is %s", location)
         return location

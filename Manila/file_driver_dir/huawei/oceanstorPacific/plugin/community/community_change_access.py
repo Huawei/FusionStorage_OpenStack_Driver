@@ -38,6 +38,7 @@ class CommunityChangeAccess(ChangeAccess):
         self.export_locations = None  # share路径信息
         self.nfs_share_id = None
         self.cifs_share_id = None
+        self.dpc_share_id = None
         self.allow_access_proto = {}
         self.deny_access_proto = {}
         self.nfs_rules = []
@@ -115,6 +116,9 @@ class CommunityChangeAccess(ChangeAccess):
                 self.client.allow_access_for_nfs(self.nfs_share_id, access_to, access_level, self.account_id)
 
         elif action == 'deny':
+            if self.nfs_share_id is None:
+                LOG.info("NFS share can not found on storage, skip deny")
+                return
             nfs_share_clients = {}
             result = self.client.query_nfs_share_clients_information(self.nfs_share_id, self.account_id)
             for data in result:
@@ -142,6 +146,10 @@ class CommunityChangeAccess(ChangeAccess):
 
                 self.client.allow_access_for_cifs(self.cifs_share_id, access_to, access_level, self.account_id)
         elif action == 'deny':
+            if self.cifs_share_id is None:
+                LOG.info("CIFS share can not found on storage, skip deny")
+                return
+
             cifs_share_clients = {}
             result = self.client.query_cifs_share_user_information(self.cifs_share_id, self.account_id)
             for data in result:
@@ -280,6 +288,8 @@ class CommunityChangeAccess(ChangeAccess):
 
     def _query_and_set_share_info(self, dtree_id=0, dtree_name=None):
         """根据share_path信息查询对应的share信息"""
+        if self.namespace_id is None or dtree_id is None:
+            return
 
         if 'NFS' in (self.allow_access_proto or self.deny_access_proto):
             result = self.client.query_nfs_share_information(
@@ -288,7 +298,7 @@ class CommunityChangeAccess(ChangeAccess):
                 if self.share_path == nfs_share.get('share_path'):
                     self.nfs_share_id = nfs_share.get('id')
                     break
-            else:
+            if not self.nfs_share_id and 'NFS' in self.allow_access_proto:
                 err_msg = _("Cannot get NFS share id(namespace_name:{0}).".format(self.namespace_name))
                 raise exception.InvalidShare(reason=err_msg)
 
@@ -299,7 +309,7 @@ class CommunityChangeAccess(ChangeAccess):
                 if self.share_path == cifs_share.get('share_path'):
                     self.cifs_share_id = cifs_share.get('id')
                     break
-            else:
+            if not self.cifs_share_id and 'CIFS' in self.allow_access_proto:
                 err_msg = _("Cannot get CIFS share id(namespace_name:{0}).".format(self.namespace_name))
                 raise exception.InvalidShare(reason=err_msg)
 
