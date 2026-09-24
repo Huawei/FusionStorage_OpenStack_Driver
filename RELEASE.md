@@ -1,9 +1,9 @@
 # 26.2.0
 ## Mappings between Cinder Driver and OpenStack versions
 
-| OpenStack |Mitaka|Newton|Ocata|Pike|Queens|Rocky|Stein|Train|Ussuri|Victoria|Wallaby|Xena|Yoga|Zed|Antelope|Bobcat|Dalmatian|Gazpacho
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-|Cinder Driver|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|
+| OpenStack |Mitaka|Newton|Ocata|Pike|Queens|Rocky|Stein|Train|Ussuri|Victoria|Wallaby|Xena|Yoga|Zed|Antelope|Bobcat|Caracal|Dalmatian|Gazpacho
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+|Cinder Driver|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√||√|
 
 ## Version mappings among Cinder Driver, Huawei storage, and OpenStack
 | OpenStack |Huawei Storage|
@@ -13,9 +13,9 @@
 
 ## Mappings between Manila Driver and OpenStack versions
 
-| OpenStack |Mitaka|Newton|Ocata|Pike|Queens|Rocky|Stein|Train|Ussuri|Victoria|Wallaby|Xena|Yoga|Zed|Antelope|Bobcat|Dalmatian|Gazpacho|
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-|Manila Driver|x|x|x|√|x|x|x|√|x|x|x|x|x|x|x|x|x|√|
+| OpenStack |Mitaka|Newton|Ocata|Pike|Queens|Rocky|Stein|Train|Ussuri|Victoria|Wallaby|Xena|Yoga|Zed|Antelope|Bobcat|Caracal|Dalmatian|Gazpacho|
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+|Manila Driver|x|x|x|√|x|x|x|√|x|x|x|x|x|x|x|x|x|x|√|
 
 ## Version mappings among Manila Driver, Huawei storage
 | OpenStack |Huawei Storage|
